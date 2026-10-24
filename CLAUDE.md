@@ -110,3 +110,17 @@ docker compose config --quiet
 - STT（只有 `[stt].enabled = true` 時）。
 
 回報時要照實說哪些沒驗到，不要把 `static.sh` 或 `deploy.sh` 退出 0 講成 smoke test 通過。
+
+## Agent skills
+
+### Issue tracker
+
+Issue 與 wayfinder map 放在 GitHub Issues（`henry5720/work-agent-deploy`），用 `gh` 操作。見 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+用預設五個：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。見 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+只有一套術語：詞彙在 `CONTEXT.md`，決策在 `docs/adr/`。見 `docs/agents/domain.md`。
