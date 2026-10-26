@@ -51,7 +51,7 @@ local 實作 agent
 
 GitHub credential只到 deployment host 與 local 實作環境，不跨進 product-context bot container。詳見 [`adr/0001-github-access-stops-at-the-host-boundary.md`](adr/0001-github-access-stops-at-the-host-boundary.md)。
 
-Deployment host就是實體host，Compose以維護者自己的帳號執行。第一版曾把它包在restricted Incus instance內，後來因為該帳號本來就在`docker` group而取消。詳見 [`adr/0003-deploy-directly-on-the-fedora-host.md`](adr/0003-deploy-directly-on-the-fedora-host.md)。
+Deployment host是一台 Linux host，Compose以維護者自己的帳號執行。第一版曾把它包在restricted Incus instance內，後來因為該帳號本來就在`docker` group而取消。詳見 [`adr/0003-deploy-directly-on-the-fedora-host.md`](adr/0003-deploy-directly-on-the-fedora-host.md)。
 
 ## 互動入口
 

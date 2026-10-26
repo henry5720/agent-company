@@ -52,7 +52,7 @@ OpenAB config 固定 Cloudflare R2 filestore 設定：bucket
 `https://99de68928da234ebcf0c9370443ad7ee.r2.cloudflarestorage.com`；只有 access key 與
 secret key 不進 Git，由 `${R2_ACCESS_KEY_ID}`／`${R2_SECRET_ACCESS_KEY}` interpolation 取得。
 
-部署到 **nettop** 前，維護者必須手動在未追蹤的 `env/openab.env` 加入：
+部署到 deployment host 前，維護者必須手動在未追蹤的 `env/openab.env` 加入：
 
 ```text
 R2_ACCESS_KEY_ID=<Cloudflare R2 access key>
@@ -151,7 +151,7 @@ Local與deployment host共用同一套 runtime設定，不另建 local Compose�
 
 完整步驟見 [`docs/runbook.md`](docs/runbook.md)。
 
-Docling 的 production baseline 與 nettop 上的 build、node 權限及 no-download 檢查命令，見
+Docling 的 production baseline 與 deployment host 上的 build、node 權限及 no-download 檢查命令，見
 [`docs/runbook.md`](docs/runbook.md#docling-production-runtime-baseline)。不要把 static test 或
 artifact directory 檢查宣稱成 offline PDF conversion；目前不支援掃描 PDF OCR，未來需另加 OCR
 engine；真實 PDF 附件仍須按 release gate 驗證。

@@ -3,7 +3,7 @@
 Local與deployment host共用同一份 Compose及runtime設定。State與 artifact 暫存檔都放在本 repo的 `runtime/`；
 兩邊都要建立 root `.env`，指定 snapshot root與執行 docker的使用者 uid/gid。
 
-Deployment host是實體 Linux host，Compose以維護者自己的帳號執行，不需要sudo。該帳號必須在`docker` group裡，
+Deployment host是一台 Linux host，Compose以維護者自己的帳號執行，不需要sudo。該帳號必須在`docker` group裡，
 並且host要有Git、SSH client、Python 3、curl、jq與cron。SELinux enforcing的host不需要額外設定，Compose的
 bind mount已經帶`:z`。
 
@@ -127,13 +127,13 @@ Root `.env` 只給 Compose用（snapshot root與 uid）；`env/openab.env` 才�
 `.env`、`env/openab.env` 與 `runtime/` 都不進 Git。Claude login存在 named volume
 `claude-credentials`，重建 container後仍保留。
 
-### Cloudflare R2 filestore（nettop 手動前置）
+### Cloudflare R2 filestore（deployment host 手動前置）
 
 唯一 OpenAB runtime config 的 `[filestore]` 必須相同：bucket 是
 `work-agent-attachments`，endpoint 是
 `https://99de68928da234ebcf0c9370443ad7ee.r2.cloudflarestorage.com`，region 是 `auto`，
 prefix 是 `incoming/`，presigned URL TTL 是 3600 秒，單檔上限是 **50 MiB**。設定檔不含
-任何 R2 credential；請在 **nettop** 手動編輯未追蹤的 `env/openab.env`，加入：
+任何 R2 credential；請在 deployment host 手動編輯未追蹤的 `env/openab.env`，加入：
 
 ```text
 R2_ACCESS_KEY_ID=<Cloudflare R2 access key>
@@ -202,7 +202,7 @@ pipeline 會明確關閉 OCR 並開啟 table structure。這個 image 不額外�
 目前不支援掃描 PDF OCR；需要 OCR 的文件必須明確回報無法讀取，不得猜測內容。未來要支援掃描
 PDF，必須另加並審核 OCR engine，不可把 RapidOCR 或其他 OCR model 偷渡進目前的 prefetch。
 
-在 **nettop** 完成 build 後，維護者必須逐字執行：
+在 deployment host 完成 build 後，維護者必須逐字執行：
 
 ```bash
 docker compose -f ./compose.yaml build --pull

@@ -73,6 +73,7 @@
 - 改 snapshot路徑或 branch時，同時更新 `config/repos.conf`、preflight與 runbook。
 - 改 Slack能力時，同時檢查 bot events、OAuth scopes、OpenAB config及人工驗收情境。
 - 不直接在 deployment host修 repo內檔案；這個 repo是部署設定的正本。
+- 文件、issue 與 commit 一律用角色名稱「deployment host」稱呼部署機。實際是哪台不寫進 repo（repo 是 public，機器也會換）；要操作前先問維護者，或在候選機器上用 `docker ps --filter name=work-agent` 確認 container 真的在那裡。
 - 沒有使用者明確要求，不建立 remote、不 commit、不 push、不部署。
 
 ## 驗證
