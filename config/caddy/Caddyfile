@@ -1,0 +1,63 @@
+# host Caddy proxy：bot → 公司 gateway（spec #21 §4、§8；#25）。
+#
+# 由 config/systemd/work-agent-proxy.service 啟動，`{$...}` 在載入時從 env 代入：
+# - WORK_AGENT_GATEWAY_IP／WORK_AGENT_PROXY_PORT：/etc/work-agent/host-network.env
+#   （正本 config/host-network.env）。
+# - COMPANY_GATEWAY_ORIGIN／COMPANY_GATEWAY_PATH_PREFIX／COMPANY_GATEWAY_API_KEY：
+#   /etc/work-agent/gateway.env（root 0600，只有 systemd 讀，container 看不到）。
+#   ORIGIN／PREFIX 由 install-host-network.sh 從 COMPANY_GATEWAY_BASE_URL 拆出來。
+# - LOGS_DIRECTORY：systemd LogsDirectory= 自動給（/var/log/work-agent-proxy）。
+#
+# 為什麼 bind 在 Docker bridge 的 gateway IP（10.231.0.1）：
+# - container 連不到 host 的 127.0.0.1，所以不能照實測時 bind 127.0.0.1。
+# - bind 0.0.0.0 會讓 proxy 出現在 VPC 網卡與 tailscale0 上，要另外靠防火牆擋。
+# - bridge IP 只存在於 work-agent-net 這個 bridge 上；bot 與 sandbox 都在同一個 bridge，
+#   所以「bot 連得到、sandbox 連不到」由 host-firewall.sh 的 INPUT 規則決定：
+#   只放 bot 的固定 IP → 這個位址的這個 port。
+# - work-agent-net 是 external network（install-host-network.sh 建），compose down 不會
+#   拿掉這個位址；Docker 開機時就把 bridge 建好，unit 排在 docker.service 之後。
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:{$WORK_AGENT_PROXY_PORT} {
+	bind {$WORK_AGENT_GATEWAY_IP}
+
+	# 用量記錄（§8）：每筆 request 一行 JSON，含 request.uri、status、duration、size。
+	# 沒有 thread、使用者、model 欄位（接受）。Caddy 預設把 Authorization 等 header 遮掉；
+	# 注入的 key 只在送往 upstream 的 request 上，不進 access log。
+	log {
+		output file {$LOGS_DIRECTORY}/access.log {
+			# 每天輪一次（量少時只靠 roll_size 永遠不會輪，舊紀錄就刪不掉），
+			# 輪出去的檔超過 14 天刪除。roll_keep 放寬，避免檔數上限先刪掉 14 天內的。
+			roll_interval 24h
+			roll_size 100MiB
+			roll_keep 1000
+			roll_keep_for 336h
+		}
+		format json
+	}
+
+	# 唯一放行的路徑。Codex 對話與 company-image 生圖／改圖（Responses API 的
+	# image_generation tool）都是 POST {base}/responses，沒有另一個生圖 endpoint。
+	@responses {
+		method POST
+		path /responses
+	}
+	handle @responses {
+		rewrite * {$COMPANY_GATEWAY_PATH_PREFIX}/responses
+		reverse_proxy {$COMPANY_GATEWAY_ORIGIN} {
+			# gateway 在 HTTPS／CDN 後面，Host 要是 gateway 自己的名字，不是 10.231.0.1。
+			header_up Host {upstream_hostport}
+			# 蓋掉 client 帶來的任何 Authorization；key 只從 Caddy 的 env 來。
+			header_up Authorization "Bearer {env.COMPANY_GATEWAY_API_KEY}"
+		}
+	}
+
+	# 其他一律 403（例如 GET /models、/chat/completions），不轉給 gateway。
+	handle {
+		respond 403
+	}
+}

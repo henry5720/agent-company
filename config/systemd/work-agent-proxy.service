@@ -1,0 +1,44 @@
+# host Caddy proxy：bot → 公司 gateway（spec #21 §4、§8；#25）。由
+# scripts/install-host-network.sh 裝到 /etc/systemd/system/；路由與 bind 理由見
+# config/caddy/Caddyfile。
+#
+# - gateway key 只在 /etc/work-agent/gateway.env（root 0600）。EnvironmentFile 由 systemd
+#   以 root 讀，Caddy 本身以 DynamicUser 跑、讀不到那個檔，也不在任何 container 的 env。
+# - bind 位址是 work-agent-net 的 bridge IP，Docker 起來才有，所以排在 docker.service 之後；
+#   萬一 bridge 還沒建好就失敗重試。
+# - access log 在 /var/log/work-agent-proxy/access.log（LogsDirectory=，Caddy 自己輪替 14 天）。
+[Unit]
+Description=work-agent host proxy to the company gateway (Caddy)
+After=docker.service work-agent-firewall.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/work-agent/host-network.env
+EnvironmentFile=/etc/work-agent/gateway.env
+ExecStart=/usr/local/bin/work-agent-caddy run --config /etc/work-agent/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5s
+
+DynamicUser=yes
+StateDirectory=work-agent-proxy
+LogsDirectory=work-agent-proxy
+LogsDirectoryMode=0750
+Environment=HOME=/var/lib/work-agent-proxy
+Environment=XDG_DATA_HOME=/var/lib/work-agent-proxy
+Environment=XDG_CONFIG_HOME=/var/lib/work-agent-proxy
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

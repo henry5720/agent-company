@@ -19,6 +19,8 @@ test -x "$ROOT/agents/bin/sandbox-run"
 test -x "$ROOT/sandbox/runner"
 test -x "$ROOT/sandbox/sandbox-screenshot"
 test -x "$ROOT/agents/bin/thread-workspace"
+test -x "$ROOT/scripts/host-firewall.sh"
+test -x "$ROOT/scripts/install-host-network.sh"
 
 python3 - "$ROOT" <<'PY'
 import json, os, pathlib, re, subprocess, tomllib
@@ -149,6 +151,10 @@ fi
 "$ROOT/tests/sandbox-runner.py"
 "$ROOT/tests/sandbox-run.py"
 "$ROOT/tests/thread-workspace.py"
+"$ROOT/tests/host-network.py"
+if [[ -z ${CADDY_BIN:-} ]] && ! command -v caddy work-agent-caddy >/dev/null 2>&1; then
+  limited 'host proxy live route test (no caddy binary; install-host-network.sh puts work-agent-caddy on PATH)'
+fi
 
 if ((${#LIMITED[@]})); then
   printf 'LIMITED VERIFICATION\n'

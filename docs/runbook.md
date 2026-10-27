@@ -377,6 +377,151 @@ OMO 的 `acpAgents.claude-code` 直接執行 Docker image 內固定版 `/usr/loc
 不會在 runtime 下載 package。Claude 只作 OMO specialist，不存在另一個 OpenAB deployment runtime，也沒有 rollback 操作。
 登入 state 保存在 `claude-credentials` named volume；OpenAB config 永遠是 `config/openab.toml`。
 
+### Host proxy 與防火牆
+
+workspace agent（spec #21 §2、§4）的前置：host Caddy proxy 注入公司 gateway key，防火牆讓
+prototype sandbox 只連得到外網、bot 只連得到 sandbox 的 runner port 與 proxy。兩者都不影響
+現在的 bot（它還在 `work-agent_default` network、key 還在 `env/openab.env`），可以先裝。
+這一段要 **sudo**，由維護者本人做。
+
+| 檔案 | 作用 |
+|---|---|
+| `config/host-network.env` | network 名、subnet、bridge 名、bot 固定 IP、proxy／runner port 的正本 |
+| `config/caddy/Caddyfile` | proxy 路由（只放 `POST /responses`，其餘 403）、bind 位址理由、JSON log 14 天 |
+| `scripts/host-firewall.sh` | 規則與理由；`apply`／`check`／`remove` |
+| `config/systemd/*.service` | 開機重下規則的 oneshot unit、Caddy unit |
+| `scripts/install-host-network.sh` | 把上面這些裝到 host（`/etc/work-agent/`、`/usr/local/sbin/`、`/etc/systemd/system/`） |
+
+位址（值見 `config/host-network.env`）：network `work-agent-net`（bridge `br-work-agent`，
+`10.231.0.0/24`，`enable_icc=false`），proxy 綁 `10.231.0.1:18080`，bot 固定 `10.231.0.10`，
+其他位址一律當 sandbox。
+
+#### 安裝
+
+```bash
+cd "$HOME/code/work-agent-deploy"
+./tests/static.sh                                   # host-network.py 要過
+sudo ./scripts/install-host-network.sh install
+```
+
+`install` 是冪等的；改了上表任何一個檔案就重跑一次（host 上的副本不要手改）。它會：
+下載 `config/versions.env` 釘版的 Caddy 並驗 SHA-512、從 `env/openab.env` 產生
+`/etc/work-agent/gateway.env`（root 0600，已存在就不動）、建 `work-agent-net`、enable 並
+重啟 `work-agent-firewall.service` 與 `work-agent-proxy.service`，最後跑一次 `check`。
+
+`env/openab.env` 裡的 key 這一步**不會**拿掉，舊 bot 還要用；切換當晚才拿（spec #21 §12）。
+`gateway.env` 只有三行：`COMPANY_GATEWAY_ORIGIN`、`COMPANY_GATEWAY_PATH_PREFIX`（由
+`COMPANY_GATEWAY_BASE_URL` 拆出）、`COMPANY_GATEWAY_API_KEY`。換 key：刪掉 `gateway.env` 重跑
+`install`，或直接 `sudoedit /etc/work-agent/gateway.env` 後 `sudo systemctl restart work-agent-proxy`。
+
+確認：
+
+```bash
+sudo work-agent-firewall check                       # 沒有輸出、exit 0
+cat /proc/sys/net/bridge/bridge-nf-call-iptables     # 要是 1
+systemctl is-active work-agent-firewall work-agent-proxy
+sudo iptables -S WORK-AGENT-FORWARD; sudo iptables -S WORK-AGENT-INPUT
+```
+
+`bridge-nf-call-iptables` 不是 1（或檔案不存在）時，同一個 bridge 上的流量不經過 iptables，
+`enable_icc=false` 與 bot→runner 規則都不成立。Docker 建 `enable_icc=false` network 時會自己
+載入 `br_netfilter`。**不可 `modprobe -r br_netfilter`**：它會連 `bridge` 一起卸掉，實測讓正式
+bot 斷線約 7.5 小時。
+
+#### 用拋棄式 container 驗（不動正式 bot）
+
+兩個 container 扮演 bot 與 sandbox（bot 角色佔用 bot 的固定 IP，正式 bot 接上 `work-agent-net` 之後
+就不能再這樣驗，要先停正式 bot），image 用 `config/versions.env` 釘的 sandbox base（有 curl 與
+node）。bot 角色**不帶任何 env**，證明 key 不必進 container。
+
+```bash
+IMG=$(sed -n 's/^SANDBOX_NODE_IMAGE=//p' config/versions.env)
+docker run -d --rm --name wa-fw-sandbox --network work-agent-net --dns 1.1.1.1 --dns 8.8.8.8 "$IMG" \
+  node -e 'for (const p of [8080, 5173]) require("http").createServer((q, s) => s.end("ok " + p)).listen(p)'
+docker run -d --rm --name wa-fw-bot --network work-agent-net --ip 10.231.0.10 "$IMG" sleep 3600
+SANDBOX_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "work-agent-net").IPAddress}}' wa-fw-sandbox)
+bot() { docker exec wa-fw-bot sh -c "$1"; }
+sbx() { docker exec wa-fw-sandbox sh -c "$1"; }
+probe() { echo "curl -sS -m 8 -o /dev/null -w '%{http_code}\n' $*"; }
+```
+
+逐條對 #25 的驗收：
+
+```bash
+# 1. bot 經 proxy 打 /responses 拿到正常回應；container env 沒有 key
+bot "env | grep -c COMPANY_GATEWAY_API_KEY"          # 0
+bot "curl -sS -m 120 http://10.231.0.1:18080/responses -H 'Content-Type: application/json' \
+  -d '{\"model\":\"gpt-5.6-terra\",\"input\":\"reply with the single word ok\",\"store\":false}'"
+                                                       # 回 JSON／SSE，含 ok；不是 401／403／405
+# 2. 生圖 endpoint 打得通（同一個 /responses，會計費一次）；其他路徑 403
+bot "curl -sS -m 180 -o /dev/null -w '%{http_code}\n' http://10.231.0.1:18080/responses \
+  -H 'Content-Type: application/json' \
+  -d '{\"model\":\"gpt-5.6-terra\",\"input\":\"a plain grey square\",\"tools\":[{\"type\":\"image_generation\",\"size\":\"1024x1024\",\"output_format\":\"png\"}],\"tool_choice\":{\"type\":\"image_generation\"},\"store\":false}'"
+                                                       # 200
+bot "$(probe http://10.231.0.1:18080/models)"           # 403
+bot "$(probe -X POST http://10.231.0.1:18080/chat/completions)"   # 403
+# 3. Caddy log 是 JSON，記得到路徑、status、耗時
+sudo tail -n 4 /var/log/work-agent-proxy/access.log | jq -c '{uri: .request.uri, status, duration}'
+sudo grep -cF "$(sudo sed -n 's/^COMPANY_GATEWAY_API_KEY=//p' /etc/work-agent/gateway.env)" \
+  /var/log/work-agent-proxy/access.log               # 0：key 不進 log
+# 4. sandbox 連得到外網；連不到 proxy、私有 IP 段、bot、IMDS（後面幾條都應該 timeout 或失敗，印 000）
+sbx "$(probe https://registry.npmjs.org/)"             # 200
+sbx "$(probe http://10.231.0.1:18080/responses)"        # 000（proxy）
+sbx "$(probe http://10.231.0.10:8080/)"                 # 000（bot）
+sbx "$(probe http://169.254.169.254/latest/meta-data/)" # 000（IMDS）
+sbx "$(probe http://172.31.0.2/)"                       # 000（VPC）
+sbx "$(probe http://172.17.0.1/)"                       # 000（host 的 docker0 位址）
+# 5. bot 只連得到 sandbox 的 runner port
+bot "$(probe http://$SANDBOX_IP:8080/)"                 # 200
+bot "$(probe http://$SANDBOX_IP:5173/)"                 # 000
+bot "$(probe http://10.231.0.1:22/)"                    # 000（host 其他 port）
+docker rm -f wa-fw-bot wa-fw-sandbox
+```
+
+`000` 的意思是連線被丟掉（curl timeout），不是 HTTP 回應。第 4 項任何一條拿到 HTTP 碼都是規則沒生效。
+`gpt-5.6-terra` 是 `agents/bin/company-image` 的 `MODEL`；換成 gateway 實際有的 model 也可以。
+
+#### 重開機後仍在
+
+```bash
+sudo reboot
+# 回來之後
+sudo work-agent-firewall check && systemctl is-active work-agent-firewall work-agent-proxy
+```
+
+再跑一次上面第 4、5 項。`work-agent-firewall.service` 排在 `docker.service` **之前**
+（必要時自己先建 `DOCKER-USER`，Docker 起來會沿用、不清內容），所以 `restart: unless-stopped`
+的 sandbox 被拉起來時規則已經在了；Docker 重啟時它也會跟著重跑（`PartOf=docker.service`）。
+
+#### IMDS hop limit（第二層）
+
+主要靠防火牆擋 `169.254.169.254`；第二層是 EC2 metadata 的 hop limit 1，讓多一跳的 container
+拿不到 IMDSv2 token。hop limit 只限制 IMDSv2 的 token，**IMDSv1 不受影響**，所以要一起設
+`http-tokens required`。先確認 host 上沒有還在用 IMDSv1 的工具。需要有
+`ec2:ModifyInstanceMetadataOptions` 權限的 AWS 憑證，在維護者自己的機器或 CloudShell 跑
+（不要把 AWS 憑證放到 deployment host）：
+
+```bash
+aws ec2 modify-instance-metadata-options --region <region> --instance-id <instance-id> \
+  --http-endpoint enabled --http-tokens required --http-put-response-hop-limit 1
+aws ec2 describe-instances --region <region> --instance-ids <instance-id> \
+  --query 'Reservations[0].Instances[0].MetadataOptions'
+```
+
+instance id 與 region 從 EC2 console 查。
+
+#### 寫回與回滾
+
+- 驗完把實際 bind 位址與 `sudo iptables -S WORK-AGENT-FORWARD`、`sudo iptables -S WORK-AGENT-INPUT`
+  的輸出寫回 #21 §2。
+- 回滾（不影響舊 bot）：
+
+```bash
+sudo systemctl disable --now work-agent-proxy work-agent-firewall
+sudo work-agent-firewall remove
+docker network rm work-agent-net          # 只有沒有 container 接在上面時
+```
+
 ### 人工 release gate
 
 `tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、runtime 版本對、

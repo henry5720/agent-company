@@ -1,0 +1,24 @@
+# bot／prototype sandbox 防火牆（spec #21 §2；#25）。由 scripts/install-host-network.sh 裝到
+# /etc/systemd/system/。規則內容與理由見 scripts/host-firewall.sh 開頭。
+#
+# 排序：
+# - Before=docker.service：開機時先下規則（必要時先建 DOCKER-USER），Docker 拉起
+#   `restart: unless-stopped` 的 container 時規則已在，沒有空窗。
+# - After=ufw.service：ufw 開機載入自己的鏈之後才插我們的 INPUT jump（ufw 只 append）。
+# - PartOf=docker.service：Docker 重啟時這個 unit 跟著重跑一次 apply（冪等）。
+# 沒有 ExecStop：停掉這個 unit 不拿掉規則（fail closed）。回滾用
+# `work-agent-firewall remove`，見 docs/runbook.md。
+[Unit]
+Description=work-agent bot/prototype sandbox firewall rules
+After=ufw.service
+Before=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=WORK_AGENT_NETWORK_ENV=/etc/work-agent/host-network.env
+ExecStart=/usr/local/sbin/work-agent-firewall apply
+
+[Install]
+WantedBy=docker.service
