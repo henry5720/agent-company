@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""在 prototype sandbox 跑 thread workspace 的指令：install、dev server、截圖。
+"""在 prototype sandbox 跑 thread 的指令：install、dev server、截圖、附件轉換。
 
 用法：sandbox-run [--timeout 秒] /home/node/work/<channel>-<thread_ts>/repos/<repo> -- <指令...>
+      sandbox-run [--timeout 秒] --thread <channel_id> <thread_ts> -- <指令...>
 
 repo 的 code 不在 bot 跑。這支 CLI 只把「哪個 thread workspace」和「要跑的 argv」
 經內部網路交給 sandbox 的 runner；sandbox 唯讀讀取 workspace、複製到自己的
 scratch 再跑，產物只寫到 out/<key>/，bot 從 /home/node/out/<key>/ 讀。
 
+- `--thread`：不需要 repo 的工作（附件轉換），不用先建 thread workspace；
+  sandbox 在空的暫存目錄跑，產物一樣寫 out/<channel>-<thread_ts>/。
 - 指令不設限；要串多步就自己包 `bash -c '...'`。指令結束後 runner 會把殘留的
   process（例如背景的 dev server）全部收掉。
 - 不帶任何 token，也不接受 runner URL 參數；runner 位置只看
@@ -32,6 +35,8 @@ OUT_ROOT = "/home/node/out"
 DEFAULT_RUNNER_URLS = "http://prototype-sandbox-1:8080 http://prototype-sandbox-2:8080"
 KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+CHANNEL_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
+THREAD_TS_PATTERN = re.compile(r"^[0-9]{10,13}\.[0-9]{1,9}$")
 DEFAULT_TIMEOUT_SECONDS = 15 * 60
 MAX_TIMEOUT_SECONDS = 15 * 60
 HTTP_MARGIN_SECONDS = 60
@@ -64,6 +69,15 @@ def workspace_of(raw: str) -> tuple[str, str]:
     return parts[0], "/".join(parts)
 
 
+def thread_key(channel: str, thread_ts: str) -> str:
+    # fullmatch：`$` 會放過結尾的換行。
+    if not CHANNEL_PATTERN.fullmatch(channel):
+        raise InputError("channel_id must be a Slack channel ID such as C0123456789")
+    if not THREAD_TS_PATTERN.fullmatch(thread_ts):
+        raise InputError("thread_ts must be a Slack timestamp such as 1710000000.123456")
+    return f"{channel}-{thread_ts}"
+
+
 def runner_urls(key: str) -> list[str]:
     urls = [url.rstrip("/") for url in re.split(r"[\s,]+", os.environ.get("SANDBOX_RUNNER_URLS", DEFAULT_RUNNER_URLS)) if url]
     if not urls:
@@ -74,18 +88,21 @@ def runner_urls(key: str) -> list[str]:
 
 def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     if "--" not in argv:
-        raise InputError("usage: sandbox-run [--timeout SECONDS] <repo path> -- <command...>")
+        raise InputError("usage: sandbox-run [--timeout SECONDS] (<repo path> | --thread <channel_id> <thread_ts>) -- <command...>")
     split = argv.index("--")
     command = argv[split + 1:]
     if not command:
         raise InputError("no command after --")
     parser = argparse.ArgumentParser(prog="sandbox-run", description=__doc__.splitlines()[0])
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="job 硬逾時秒數（最多 900）")
-    parser.add_argument("repo", help=f"{WORK_ROOT}/<channel>-<thread_ts>/repos/<repo>")
+    parser.add_argument("--thread", nargs=2, metavar=("CHANNEL_ID", "THREAD_TS"), help="不需要 repo 的工作")
+    parser.add_argument("repo", nargs="?", help=f"{WORK_ROOT}/<channel>-<thread_ts>/repos/<repo>")
     try:
         args = parser.parse_args(argv[:split])
     except SystemExit as exc:
         raise InputError("invalid arguments") from exc
+    if (args.thread is None) == (args.repo is None):
+        raise InputError("give either a repo path or --thread <channel_id> <thread_ts>")
     if not 1 <= args.timeout <= MAX_TIMEOUT_SECONDS:
         raise InputError(f"--timeout must be 1..{MAX_TIMEOUT_SECONDS}")
     return args, command
@@ -126,8 +143,13 @@ def dispatch(key: str, payload: dict) -> dict:
 def main(argv: list[str]) -> int:
     try:
         args, command = parse_args(argv)
-        key, workspace = workspace_of(args.repo)
-        result = dispatch(key, {"workspace": workspace, "argv": command, "timeout_seconds": args.timeout})
+        if args.thread:
+            key = thread_key(*args.thread)
+            target = {"thread": key}
+        else:
+            key, workspace = workspace_of(args.repo)
+            target = {"workspace": workspace}
+        result = dispatch(key, {**target, "argv": command, "timeout_seconds": args.timeout})
     except (InputError, RuntimeFailure) as exc:
         print(f"sandbox-run: {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT if isinstance(exc, InputError) else EXIT_RUNTIME

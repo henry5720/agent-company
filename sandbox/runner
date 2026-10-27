@@ -4,7 +4,9 @@
 一個 sandbox 格子一次只跑一個 job：
 
 1. 驗 `workspace`（`<channel_id>-<thread root ts>/repos/<repo>`），在唯讀掛載的
-   WORK_ROOT 底下逐段確認是真的目錄、不是 symlink。
+   WORK_ROOT 底下逐段確認是真的目錄、不是 symlink。不需要 repo 的工作（附件
+   轉換）改帶 `thread`（`<channel_id>-<thread root ts>`），在 scratch 底下的空暫存
+   目錄跑、結束就刪，不碰這格保留的 node_modules。
 2. 把原始碼同步到自己的 SCRATCH_ROOT（不帶 `.git`）。同一個 thread 連續執行時
    保留各層 `node_modules`，換 thread 就整個清掉。scratch 是這格自己的 volume。
 3. 在 scratch 裡用新的 session 跑指令；環境變數只用白名單，不轉交 runner 自己的
@@ -52,7 +54,7 @@ PASSTHROUGH_ENV = (
     "PATH", "LANG", "LC_ALL", "TZ", "NODE_OPTIONS", "NODE_PATH",
     "PLAYWRIGHT_BROWSERS_PATH", "COREPACK_HOME", "COREPACK_ENABLE_DOWNLOAD_PROMPT",
     "COREPACK_ENABLE_STRICT", "PNPM_HOME", "npm_config_store_dir", "npm_config_cache",
-    "GOMEMLIMIT",
+    "GOMEMLIMIT", "OFFICEPARSER_VERSION",
 )
 
 O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
@@ -252,13 +254,31 @@ def tail(path: Path) -> str:
     return prefix + data.decode("utf-8", "replace")
 
 
+def parse_thread(raw: object) -> str:
+    if not isinstance(raw, str) or not KEY_PATTERN.fullmatch(raw):
+        raise RequestError(400, "thread must be '<channel>-<thread_ts>'")
+    return raw
+
+
 def run_job(config: dict, payload: dict) -> dict:
-    key, repo = parse_workspace(payload.get("workspace"))
+    if "thread" in payload and "workspace" in payload:
+        raise RequestError(400, "send either workspace or thread, not both")
     argv = parse_argv(payload.get("argv"))
     timeout = parse_timeout(payload.get("timeout_seconds"))
+    if "thread" in payload:
+        # 不需要 repo 的工作（附件轉換）：在空的暫存目錄跑，不動這格的 thread scratch。
+        key = parse_thread(payload["thread"])
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(prefix="thread-", dir=config["scratch_root"]) as cwd:
+            return execute(config, key, argv, timeout, Path(cwd), started)
+    key, repo = parse_workspace(payload.get("workspace"))
     source = require_real_dir(config["work_root"], (key, "repos", repo))
     started = time.monotonic()
     cwd = prepare_scratch(config["scratch_root"], key, repo, source)
+    return execute(config, key, argv, timeout, cwd, started)
+
+
+def execute(config: dict, key: str, argv: list[str], timeout: int, cwd: Path, started: float) -> dict:
     out_dir = prepare_out(config["out_root"], key)
     with tempfile.TemporaryFile(dir=config["scratch_root"]) as log:
         try:

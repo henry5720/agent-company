@@ -18,6 +18,7 @@ test -x "$ROOT/agents/bin/parse-document"
 test -x "$ROOT/agents/bin/sandbox-run"
 test -x "$ROOT/sandbox/runner"
 test -x "$ROOT/sandbox/sandbox-screenshot"
+test -x "$ROOT/sandbox/sandbox-attachment"
 test -x "$ROOT/agents/bin/thread-workspace"
 
 python3 - "$ROOT" <<'PY'
@@ -43,7 +44,7 @@ tag = versions['OPENAB_IMAGE'].split('@', 1)[0].rsplit(':', 1)[-1]
 assert tag not in ('latest', 'beta', 'stable')
 for key in ('OPENCODE_VERSION', 'OMO_VERSION', 'CODEGRAPH_VERSION',
             'CLAUDE_AGENT_ACP_VERSION', 'CLAUDE_CODE_VERSION', 'DOCLING_VERSION',
-            'PLAYWRIGHT_VERSION'):
+            'PLAYWRIGHT_VERSION', 'OFFICEPARSER_VERSION'):
     assert re.fullmatch(r'\d+\.\d+\.\d+', versions[key]), key
 assert re.fullmatch(r'node:\d+\.\d+\.\d+-bookworm@sha256:[0-9a-f]{64}', versions['SANDBOX_NODE_IMAGE']), \
     'SANDBOX_NODE_IMAGE must be an exact node bookworm tag with a digest'
@@ -51,6 +52,10 @@ sandbox_dockerfile = (root / 'sandbox/Dockerfile').read_text()
 assert 'ARG SANDBOX_NODE_IMAGE\nFROM ${SANDBOX_NODE_IMAGE}\n' in sandbox_dockerfile
 assert 'ARG PLAYWRIGHT_VERSION\n' in sandbox_dockerfile, 'Playwright version must come from versions.env'
 assert 'install --with-deps chromium' in sandbox_dockerfile
+assert 'ARG OFFICEPARSER_VERSION\n' in sandbox_dockerfile and 'OFFICEPARSER_VERSION=${OFFICEPARSER_VERSION}' in sandbox_dockerfile, \
+    'attachment converter version must come from versions.env and reach the runtime env'
+assert 'npm install -g "playwright@' in sandbox_dockerfile and not re.search(r'npm install[^\n]*officeparser', sandbox_dockerfile), \
+    'officeparser is installed on the fly, not baked into the sandbox image'
 assert re.search(r'^USER node$', sandbox_dockerfile, re.M) and sandbox_dockerfile.rstrip().splitlines()[-1] == 'CMD ["sandbox-runner"]'
 assert sandbox_dockerfile.rfind('USER node') > sandbox_dockerfile.rfind('USER root'), 'sandbox must run as node'
 assert not re.search(r'(TOKEN|API_KEY|SECRET)', sandbox_dockerfile), 'sandbox image must not carry tokens'
@@ -148,6 +153,7 @@ fi
 "$ROOT/tests/provider-route.py"
 "$ROOT/tests/sandbox-runner.py"
 "$ROOT/tests/sandbox-run.py"
+"$ROOT/tests/sandbox-attachment.py"
 "$ROOT/tests/thread-workspace.py"
 
 if ((${#LIMITED[@]})); then

@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""在 prototype sandbox 內把 Slack 附件（PDF／DOCX／XLSX／PPTX）轉成 Markdown，寫到 $OUT_DIR。
+
+用法：sandbox-attachment <OpenAB 給的 presigned URL> <原始檔名>
+經 bot 呼叫：sandbox-run --thread <channel_id> <thread_ts> -- sandbox-attachment <url> <filename>
+
+- 只下載參數給的那個 URL，不轉給其他服務。URL 是不是 OpenAB 注入的，由 agent 的
+  contract 決定；這裡只擋非 http(s)。sandbox 本身沒有任何 token、連不到內網。
+- 轉換工具不預裝：每次用 `npm exec` 現裝 OFFICEPARSER_VERSION 指定的 officeparser
+  （正本 config/versions.env，build arg 進 image）。同一格 container 活著時 npm cache
+  會留著，第二次以後不用重下。不碰 apt（spec §7：需要 apt 的工具改 image）。
+- `--allowRemoteAssets=false`：pdf.js worker／OCR 資料不准從 CDN 抓。不做 OCR，
+  掃描檔轉不出字就明講。
+- 輸出：$OUT_DIR/<清理過的檔名>.md；下載的原檔只在 cwd 的暫存目錄，結束就刪。
+- 退出碼：0 成功；2 參數錯（不下載、不安裝）；3 下載、驗格式、安裝或轉換失敗。
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import urlopen
+
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # OpenAB／R2 的單檔上限
+DOWNLOAD_TIMEOUT_SECONDS = 120
+CONVERT_TIMEOUT_SECONDS = 600
+CHUNK = 1024 * 1024
+SUPPORTED = ("pdf", "docx", "xlsx", "pptx")
+VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+FRONT_MATTER = re.compile(r"\A\s*---\n.*?\n---\n", re.S)
+EXIT_INVALID_INPUT = 2
+EXIT_RUNTIME = 3
+
+
+class InputError(Exception):
+    pass
+
+
+class RuntimeFailure(Exception):
+    pass
+
+
+def parse_args(argv: list[str]) -> tuple[str, str, str]:
+    if len(argv) != 2:
+        raise InputError("usage: sandbox-attachment <url> <filename>")
+    url, filename = argv
+    if urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).netloc:
+        raise InputError("url must be the http(s) URL OpenAB gave you")
+    base = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    stem, dot, ext = base.rpartition(".")
+    ext = ext.lower()
+    if not dot or not stem or ext not in SUPPORTED:
+        raise InputError(f"only {', '.join('.' + e for e in SUPPORTED)} attachments are supported")
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in stem).lstrip(".")[:100] or "attachment"
+    return url, ext, f"{safe}.{ext}.md"
+
+
+def converter_version() -> str:
+    version = os.environ.get("OFFICEPARSER_VERSION", "")
+    if not VERSION_PATTERN.fullmatch(version):
+        raise RuntimeFailure("OFFICEPARSER_VERSION is not set to an exact version; the sandbox image is misbuilt")
+    return version
+
+
+def download(url: str, target: Path) -> None:
+    try:
+        with urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+            declared = response.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
+                raise RuntimeFailure("attachment is larger than 50 MiB")
+            size = 0
+            with open(target, "xb") as handle:
+                while chunk := response.read(CHUNK):
+                    size += len(chunk)
+                    if size > MAX_DOWNLOAD_BYTES:
+                        raise RuntimeFailure("attachment is larger than 50 MiB")
+                    handle.write(chunk)
+    except HTTPError as exc:
+        raise RuntimeFailure(f"download failed: HTTP {exc.code} (the presigned URL may have expired)") from exc
+    except (URLError, OSError) as exc:
+        raise RuntimeFailure(f"download failed: {getattr(exc, 'reason', exc)}") from exc
+
+
+def check_signature(path: Path, ext: str) -> None:
+    with open(path, "rb") as handle:
+        head = handle.read(1024)
+    ok = b"%PDF-" in head if ext == "pdf" else head.startswith(b"PK\x03\x04")
+    if not ok:
+        raise RuntimeFailure(f"file content is not a .{ext} document")
+
+
+def convert(source: Path, ext: str, version: str) -> str:
+    command = [
+        "npm", "exec", "--yes", f"--package=officeparser@{version}", "--", "officeparser",
+        str(source), "--to=md", f"--fileType={ext}", "--allowRemoteAssets=false",
+    ]
+    env = {**os.environ, "npm_config_update_notifier": "false", "npm_config_fund": "false", "npm_config_audit": "false"}
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, env=env, timeout=CONVERT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeFailure(f"conversion did not finish within {CONVERT_TIMEOUT_SECONDS}s") from exc
+    except OSError as exc:
+        raise RuntimeFailure(f"cannot start npm: {exc.strerror}") from exc
+    if proc.returncode != 0:
+        raise RuntimeFailure(f"officeparser failed (exit {proc.returncode}): {proc.stderr.strip()[-2000:]}")
+    body = proc.stdout
+    while FRONT_MATTER.match(body):
+        body = FRONT_MATTER.sub("", body, count=1)
+    if not re.sub(r"^\s*---\s*$", "", body, flags=re.M).strip():
+        raise RuntimeFailure("no extractable text (scanned or image-only document?); OCR is not supported")
+    return proc.stdout
+
+
+def write_output(out_dir: Path, name: str, text: str) -> Path:
+    target = out_dir / name
+    fd, temp = tempfile.mkstemp(prefix=".tmp-", dir=out_dir)
+    try:
+        os.fchmod(fd, 0o644)  # bot 以唯讀 mount 讀 out，mkstemp 預設 0600
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temp, target)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+    return target
+
+
+def main(argv: list[str]) -> int:
+    try:
+        url, ext, out_name = parse_args(argv)
+        out_dir = Path(os.environ.get("OUT_DIR", ""))
+        if not os.environ.get("OUT_DIR") or not out_dir.is_dir():
+            raise InputError("OUT_DIR is not set; run this through sandbox-run")
+        version = converter_version()
+        with tempfile.TemporaryDirectory(prefix="attachment-", dir=".") as work:
+            source = Path(work).resolve() / f"attachment.{ext}"
+            download(url, source)
+            check_signature(source, ext)
+            text = convert(source, ext, version)
+        target = write_output(out_dir, out_name, text)
+    except (InputError, RuntimeFailure) as exc:
+        print(f"sandbox-attachment: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT if isinstance(exc, InputError) else EXIT_RUNTIME
+    print(f"sandbox-attachment: wrote {target} ({len(text)} chars)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
