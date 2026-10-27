@@ -15,6 +15,7 @@ test ! -e "$ROOT/scripts/compose.sh"
 test -x "$ROOT/agents/bin/company-image"
 test -x "$ROOT/agents/bin/slack-thread-artifact"
 test -x "$ROOT/agents/bin/parse-document"
+test -x "$ROOT/agents/bin/thread-workspace"
 
 python3 - "$ROOT" <<'PY'
 import json, os, pathlib, re, subprocess, tomllib
@@ -131,6 +132,7 @@ fi
 "$ROOT/tests/slack-thread-artifact.py"
 "$ROOT/tests/artifact-path-safety.py"
 "$ROOT/tests/provider-route.py"
+"$ROOT/tests/thread-workspace.py"
 
 if ((${#LIMITED[@]})); then
   printf 'LIMITED VERIFICATION\n'
