@@ -15,6 +15,9 @@ test ! -e "$ROOT/scripts/compose.sh"
 test -x "$ROOT/agents/bin/company-image"
 test -x "$ROOT/agents/bin/slack-thread-artifact"
 test -x "$ROOT/agents/bin/parse-document"
+test -x "$ROOT/agents/bin/sandbox-run"
+test -x "$ROOT/sandbox/runner"
+test -x "$ROOT/sandbox/sandbox-screenshot"
 
 python3 - "$ROOT" <<'PY'
 import json, os, pathlib, re, subprocess, tomllib
@@ -38,8 +41,19 @@ assert '@sha256:' in versions['OPENAB_IMAGE']
 tag = versions['OPENAB_IMAGE'].split('@', 1)[0].rsplit(':', 1)[-1]
 assert tag not in ('latest', 'beta', 'stable')
 for key in ('OPENCODE_VERSION', 'OMO_VERSION', 'CODEGRAPH_VERSION',
-            'CLAUDE_AGENT_ACP_VERSION', 'CLAUDE_CODE_VERSION', 'DOCLING_VERSION'):
+            'CLAUDE_AGENT_ACP_VERSION', 'CLAUDE_CODE_VERSION', 'DOCLING_VERSION',
+            'PLAYWRIGHT_VERSION'):
     assert re.fullmatch(r'\d+\.\d+\.\d+', versions[key]), key
+assert re.fullmatch(r'node:\d+\.\d+\.\d+-bookworm@sha256:[0-9a-f]{64}', versions['SANDBOX_NODE_IMAGE']), \
+    'SANDBOX_NODE_IMAGE must be an exact node bookworm tag with a digest'
+sandbox_dockerfile = (root / 'sandbox/Dockerfile').read_text()
+assert 'ARG SANDBOX_NODE_IMAGE\nFROM ${SANDBOX_NODE_IMAGE}\n' in sandbox_dockerfile
+assert 'ARG PLAYWRIGHT_VERSION\n' in sandbox_dockerfile, 'Playwright version must come from versions.env'
+assert 'install --with-deps chromium' in sandbox_dockerfile
+assert re.search(r'^USER node$', sandbox_dockerfile, re.M) and sandbox_dockerfile.rstrip().splitlines()[-1] == 'CMD ["sandbox-runner"]'
+assert sandbox_dockerfile.rfind('USER node') > sandbox_dockerfile.rfind('USER root'), 'sandbox must run as node'
+assert not re.search(r'(TOKEN|API_KEY|SECRET)', sandbox_dockerfile), 'sandbox image must not carry tokens'
+assert not re.search(r'@(latest|beta|stable|next)\b', sandbox_dockerfile)
 
 repos = {}
 for line in (root / 'config/repos.conf').read_text().splitlines():
@@ -131,6 +145,8 @@ fi
 "$ROOT/tests/slack-thread-artifact.py"
 "$ROOT/tests/artifact-path-safety.py"
 "$ROOT/tests/provider-route.py"
+"$ROOT/tests/sandbox-runner.py"
+"$ROOT/tests/sandbox-run.py"
 
 if ((${#LIMITED[@]})); then
   printf 'LIMITED VERIFICATION\n'

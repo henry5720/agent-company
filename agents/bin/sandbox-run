@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""在 prototype sandbox 跑 thread workspace 的指令：install、dev server、截圖。
+
+用法：sandbox-run [--timeout 秒] /home/node/work/<channel>-<thread_ts>/repos/<repo> -- <指令...>
+
+repo 的 code 不在 bot 跑。這支 CLI 只把「哪個 thread workspace」和「要跑的 argv」
+經內部網路交給 sandbox 的 runner；sandbox 唯讀讀取 workspace、複製到自己的
+scratch 再跑，產物只寫到 out/<key>/，bot 從 /home/node/out/<key>/ 讀。
+
+- 指令不設限；要串多步就自己包 `bash -c '...'`。指令結束後 runner 會把殘留的
+  process（例如背景的 dev server）全部收掉。
+- 不帶任何 token，也不接受 runner URL 參數；runner 位置只看
+  SANDBOX_RUNNER_URLS（空白或逗號分隔）。同一個 thread 先試同一格，保住那格
+  的 node_modules；那格在忙或連不上才換下一格。
+- 退出碼：指令自己的退出碼；逾時 124；輸入錯誤 2；所有格子都忙或連不上 3。
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import posixpath
+import re
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+WORK_ROOT = "/home/node/work"
+OUT_ROOT = "/home/node/out"
+DEFAULT_RUNNER_URLS = "http://prototype-sandbox-1:8080 http://prototype-sandbox-2:8080"
+KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")
+REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+DEFAULT_TIMEOUT_SECONDS = 15 * 60
+MAX_TIMEOUT_SECONDS = 15 * 60
+HTTP_MARGIN_SECONDS = 60
+EXIT_INVALID_INPUT = 2
+EXIT_RUNTIME = 3
+EXIT_TIMEOUT = 124
+
+
+class InputError(Exception):
+    pass
+
+
+class RuntimeFailure(Exception):
+    pass
+
+
+def workspace_of(raw: str) -> tuple[str, str]:
+    """把 bot 端路徑換成 runner 的 `<key>/repos/<repo>`。純字串運算。"""
+    if not raw.startswith("/"):
+        raise InputError(f"repo path must be absolute under {WORK_ROOT}")
+    normalized = posixpath.normpath(raw)
+    if normalized != raw.rstrip("/"):
+        raise InputError("repo path must not contain '.', '..' or repeated slashes")
+    prefix = WORK_ROOT + "/"
+    if not normalized.startswith(prefix):
+        raise InputError(f"repo path must live under {WORK_ROOT}; use thread-workspace first")
+    parts = normalized[len(prefix):].split("/")
+    if len(parts) != 3 or parts[1] != "repos" or not KEY_PATTERN.match(parts[0]) or not REPO_PATTERN.match(parts[2]):
+        raise InputError(f"repo path must be {WORK_ROOT}/<channel>-<thread_ts>/repos/<repo>")
+    return parts[0], "/".join(parts)
+
+
+def runner_urls(key: str) -> list[str]:
+    urls = [url.rstrip("/") for url in re.split(r"[\s,]+", os.environ.get("SANDBOX_RUNNER_URLS", DEFAULT_RUNNER_URLS)) if url]
+    if not urls:
+        raise RuntimeFailure("SANDBOX_RUNNER_URLS is empty")
+    start = int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(urls)
+    return urls[start:] + urls[:start]
+
+
+def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    if "--" not in argv:
+        raise InputError("usage: sandbox-run [--timeout SECONDS] <repo path> -- <command...>")
+    split = argv.index("--")
+    command = argv[split + 1:]
+    if not command:
+        raise InputError("no command after --")
+    parser = argparse.ArgumentParser(prog="sandbox-run", description=__doc__.splitlines()[0])
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="job 硬逾時秒數（最多 900）")
+    parser.add_argument("repo", help=f"{WORK_ROOT}/<channel>-<thread_ts>/repos/<repo>")
+    try:
+        args = parser.parse_args(argv[:split])
+    except SystemExit as exc:
+        raise InputError("invalid arguments") from exc
+    if not 1 <= args.timeout <= MAX_TIMEOUT_SECONDS:
+        raise InputError(f"--timeout must be 1..{MAX_TIMEOUT_SECONDS}")
+    return args, command
+
+
+def post(url: str, payload: dict, timeout: int) -> dict:
+    request = Request(
+        url + "/run", data=json.dumps(payload).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read())
+
+
+def error_message(exc: HTTPError) -> str:
+    try:
+        return json.loads(exc.read()).get("error", str(exc))
+    except (ValueError, OSError, AttributeError):
+        return str(exc)
+
+
+def dispatch(key: str, payload: dict) -> dict:
+    tried = []
+    for url in runner_urls(key):
+        try:
+            return post(url, payload, payload["timeout_seconds"] + HTTP_MARGIN_SECONDS)
+        except HTTPError as exc:
+            if exc.code == 409:
+                tried.append(f"{url} busy"); continue
+            if exc.code in (400, 404):
+                raise InputError(error_message(exc)) from exc
+            raise RuntimeFailure(f"{url}: HTTP {exc.code}: {error_message(exc)}") from exc
+        except (URLError, OSError) as exc:
+            tried.append(f"{url} unreachable ({getattr(exc, 'reason', exc)})"); continue
+    raise RuntimeFailure("all prototype sandboxes are busy or unreachable: " + "; ".join(tried))
+
+
+def main(argv: list[str]) -> int:
+    try:
+        args, command = parse_args(argv)
+        key, workspace = workspace_of(args.repo)
+        result = dispatch(key, {"workspace": workspace, "argv": command, "timeout_seconds": args.timeout})
+    except (InputError, RuntimeFailure) as exc:
+        print(f"sandbox-run: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT if isinstance(exc, InputError) else EXIT_RUNTIME
+
+    sys.stdout.write(result.get("output", ""))
+    out_dir = f"{OUT_ROOT}/{result.get('out_key', key)}"
+    files = ", ".join(f"{out_dir}/{name}" for name in result.get("files", [])) or "(none)"
+    print(f"sandbox-run: exit={result.get('exit_code')} in {result.get('duration_seconds')}s; out files: {files}", file=sys.stderr)
+    if result.get("timed_out"):
+        print(f"sandbox-run: timed out after {args.timeout}s; all processes were killed", file=sys.stderr)
+        return EXIT_TIMEOUT
+    code = result.get("exit_code")
+    if not isinstance(code, int):
+        return EXIT_RUNTIME
+    return code if 0 <= code <= 255 else 128 + min(-code, 127)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

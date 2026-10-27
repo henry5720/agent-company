@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""prototype sandbox 的 HTTP runner。bot 只透過 `sandbox-run` 呼叫這裡。
+
+一個 sandbox 格子一次只跑一個 job：
+
+1. 驗 `workspace`（`<channel_id>-<thread root ts>/repos/<repo>`），在唯讀掛載的
+   WORK_ROOT 底下逐段確認是真的目錄、不是 symlink。
+2. 把原始碼同步到自己的 SCRATCH_ROOT（不帶 `.git`）。同一個 thread 連續執行時
+   保留各層 `node_modules`，換 thread 就整個清掉。scratch 是這格自己的 volume。
+3. 在 scratch 裡用新的 session 跑指令；環境變數只用白名單，不轉交 runner 自己的
+   env，所以就算有人誤把 token 放進 sandbox，job 也拿不到。GOMEMLIMIT 在白名單
+   裡：vite 的 esbuild（Go）做 dependency 預打包時會吃到 1.9 GB，4g 的格子會被
+   OOM kill（#26 實測），image 預設給它一個軟上限。
+4. 指令結束（或逾時）後，把同一個 session 的殘留 process 全部殺掉；dev server
+   不會留在背景。SANDBOX_SWEEP_ALL=1 時（image 內預設），連逃出 session 的
+   process 也一起殺：這個 container 只有 runner 和它的 job。
+5. 只回傳 out/<key>/ 底下的檔名；檔案本身由 bot 唯讀掛載 out 後自己讀。
+
+thread workspace 是唯讀掛載，這是邊界；runner 的路徑檢查只是讓錯誤早點、清楚地
+發生。指令本身不設限（spec §6）。
+"""
+
+from __future__ import annotations
+
+import errno
+import json
+import os
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")
+REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+DEFAULT_TIMEOUT_SECONDS = 15 * 60
+MAX_TIMEOUT_SECONDS = 15 * 60
+OUTPUT_TAIL_BYTES = 32 * 1024
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_ARGV_ITEMS = 256
+THREAD_MARKER = ".sandbox-thread"
+PRESERVED_DIRS = {"node_modules"}
+SKIPPED_SOURCE = {".git", "node_modules"}
+# job 只看得到這些 env。runner 自己的其他 env（包括任何 token）不會往下傳。
+PASSTHROUGH_ENV = (
+    "PATH", "LANG", "LC_ALL", "TZ", "NODE_OPTIONS", "NODE_PATH",
+    "PLAYWRIGHT_BROWSERS_PATH", "COREPACK_HOME", "COREPACK_ENABLE_DOWNLOAD_PROMPT",
+    "COREPACK_ENABLE_STRICT", "PNPM_HOME", "npm_config_store_dir", "npm_config_cache",
+    "GOMEMLIMIT",
+)
+
+O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+class RequestError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def parse_workspace(raw: object) -> tuple[str, str]:
+    if not isinstance(raw, str):
+        raise RequestError(400, "workspace must be '<channel>-<thread_ts>/repos/<repo>'")
+    parts = raw.split("/")
+    if len(parts) != 3 or parts[1] != "repos" or not KEY_PATTERN.match(parts[0]) or not REPO_PATTERN.match(parts[2]):
+        raise RequestError(400, "workspace must be '<channel>-<thread_ts>/repos/<repo>'")
+    return parts[0], parts[2]
+
+
+def parse_argv(raw: object) -> list[str]:
+    if (
+        not isinstance(raw, list) or not raw or len(raw) > MAX_ARGV_ITEMS
+        or not all(isinstance(item, str) and "\0" not in item for item in raw)
+    ):
+        raise RequestError(400, "argv must be a non-empty list of strings")
+    return raw
+
+
+def parse_timeout(raw: object) -> int:
+    if raw is None:
+        return DEFAULT_TIMEOUT_SECONDS
+    if not isinstance(raw, int) or isinstance(raw, bool) or not 1 <= raw <= MAX_TIMEOUT_SECONDS:
+        raise RequestError(400, f"timeout_seconds must be 1..{MAX_TIMEOUT_SECONDS}")
+    return raw
+
+
+def require_real_dir(root: Path, parts: tuple[str, ...]) -> Path:
+    """逐段 O_NOFOLLOW 開目錄，確認 workspace 沒有經過 symlink。"""
+    fd = os.open(root, os.O_RDONLY | O_DIRECTORY)
+    try:
+        for name in parts:
+            try:
+                child = os.open(name, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW, dir_fd=fd)
+            except OSError as exc:
+                if exc.errno == errno.ENOENT:
+                    raise RequestError(404, f"thread workspace not found: {'/'.join(parts)}") from exc
+                raise RequestError(400, f"{name} is a symlink or not a directory") from exc
+            os.close(fd)
+            fd = child
+    finally:
+        os.close(fd)
+    return root.joinpath(*parts)
+
+
+def remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def sync_tree(src: Path, dst: Path) -> None:
+    """把 src 同步到 dst：不帶 .git／node_modules，保留 dst 既有的 node_modules。
+
+    symlink 原樣複製成 symlink，不跟著走。檔案大小與 mtime 都沒變就不重寫，
+    讓 vite 只看到真的改過的檔。
+    """
+    dst.mkdir(exist_ok=True)
+    entries = {entry.name: entry for entry in os.scandir(src) if entry.name not in SKIPPED_SOURCE}
+    for existing in os.scandir(dst):
+        if existing.name in PRESERVED_DIRS:
+            continue
+        if existing.name not in entries:
+            remove(Path(existing.path))
+    for name, entry in entries.items():
+        target = dst / name
+        src_stat = entry.stat(follow_symlinks=False)
+        try:
+            dst_stat = os.lstat(target)
+        except FileNotFoundError:
+            dst_stat = None
+        if stat.S_ISLNK(src_stat.st_mode):
+            if dst_stat is not None:
+                remove(target)
+            os.symlink(os.readlink(entry.path), target)
+        elif stat.S_ISDIR(src_stat.st_mode):
+            if dst_stat is not None and not stat.S_ISDIR(dst_stat.st_mode):
+                remove(target)
+            sync_tree(Path(entry.path), target)
+        elif stat.S_ISREG(src_stat.st_mode):
+            if dst_stat is not None and stat.S_ISREG(dst_stat.st_mode) and (
+                dst_stat.st_size == src_stat.st_size and dst_stat.st_mtime_ns == src_stat.st_mtime_ns
+            ):
+                continue
+            if dst_stat is not None:
+                remove(target)
+            shutil.copy2(entry.path, target, follow_symlinks=False)
+        # socket、FIFO、device 一律不帶。
+
+
+def prepare_scratch(scratch_root: Path, key: str, repo: str, source: Path) -> Path:
+    marker = scratch_root / THREAD_MARKER
+    owner = f"{key}/{repo}\n"
+    try:
+        same_thread = marker.read_text() == owner
+    except FileNotFoundError:
+        same_thread = False
+    if not same_thread:
+        for entry in os.scandir(scratch_root):
+            remove(Path(entry.path))
+        marker.write_text(owner)
+    target = scratch_root / repo
+    sync_tree(source, target)
+    return target
+
+
+def prepare_out(out_root: Path, key: str) -> Path:
+    out_dir = out_root / key
+    try:
+        os.mkdir(out_dir, 0o755)
+    except FileExistsError:
+        pass
+    if not stat.S_ISDIR(os.lstat(out_dir).st_mode):
+        raise RequestError(500, f"out/{key} is not a real directory")
+    return out_dir
+
+
+def job_env(out_dir: Path) -> dict[str, str]:
+    env = {key: os.environ[key] for key in PASSTHROUGH_ENV if key in os.environ}
+    env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    # CI=1：repo 的 prepare script 看到 CI 就不裝 husky。BROWSER=none：vite 的
+    # `server.open` 不去找 xdg-open（container 裡沒有，只會噴錯）。
+    env.update({
+        "HOME": os.environ.get("HOME", "/home/node"), "OUT_DIR": str(out_dir),
+        "CI": "1", "BROWSER": "none",
+    })
+    return env
+
+
+def session_pids(sid: int) -> list[int]:
+    pids = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            fields = Path(f"/proc/{name}/stat").read_text().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        # fields[0] 是 state，[3] 是 session id（proc(5) 的第 6 欄）。
+        if int(fields[3]) == sid:
+            pids.append(int(name))
+    return pids
+
+
+def all_other_pids() -> list[int]:
+    me = os.getpid()
+    return [int(name) for name in os.listdir("/proc") if name.isdigit() and int(name) not in (me, 1)]
+
+
+def kill_job(sid: int, sweep_all: bool) -> None:
+    for _ in range(50):
+        pids = session_pids(sid)
+        if sweep_all:
+            pids = sorted(set(pids) | set(all_other_pids()))
+        pids = [pid for pid in pids if pid != os.getpid()]
+        if not pids:
+            return
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        reap()
+        time.sleep(0.05)
+
+
+def reap() -> None:
+    """runner 是 container 的 PID 1 時，孤兒 process 會掛到這裡，要自己收。"""
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
+def tail(path: Path) -> str:
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - OUTPUT_TAIL_BYTES))
+        data = handle.read()
+    prefix = "...(truncated)\n" if size > OUTPUT_TAIL_BYTES else ""
+    return prefix + data.decode("utf-8", "replace")
+
+
+def run_job(config: dict, payload: dict) -> dict:
+    key, repo = parse_workspace(payload.get("workspace"))
+    argv = parse_argv(payload.get("argv"))
+    timeout = parse_timeout(payload.get("timeout_seconds"))
+    source = require_real_dir(config["work_root"], (key, "repos", repo))
+    started = time.monotonic()
+    cwd = prepare_scratch(config["scratch_root"], key, repo, source)
+    out_dir = prepare_out(config["out_root"], key)
+    with tempfile.TemporaryFile(dir=config["scratch_root"]) as log:
+        try:
+            process = subprocess.Popen(
+                argv, cwd=cwd, env=job_env(out_dir), stdin=subprocess.DEVNULL,
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            )
+        except OSError as exc:
+            raise RequestError(400, f"cannot start {argv[0]}: {exc.strerror}") from exc
+        timed_out = False
+        try:
+            exit_code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            exit_code = None
+        kill_job(process.pid, config["sweep_all"])
+        if exit_code is None:
+            exit_code = process.wait()
+        log.flush()
+        log_path = Path(f"/proc/self/fd/{log.fileno()}")
+        output = tail(log_path)
+    files = sorted(entry.name for entry in os.scandir(out_dir) if entry.is_file(follow_symlinks=False))
+    return {
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "duration_seconds": round(time.monotonic() - started, 1),
+        "output": output,
+        "out_key": key,
+        "files": files,
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "sandbox-runner"
+
+    def log_message(self, fmt, *args):  # noqa: N802 - http.server API
+        if not self.server.config["quiet"]:
+            sys.stderr.write("sandbox-runner: " + fmt % args + "\n")
+
+    def reply(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/healthz":
+            self.reply(200, {"ok": True, "busy": self.server.lock.locked()})
+        else:
+            self.reply(404, {"error": "not found"})
+
+    def do_POST(self):  # noqa: N802
+        if self.path != "/run":
+            self.reply(404, {"error": "not found"}); return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_REQUEST_BYTES:
+                raise RequestError(400, "request body is empty or too large")
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise RequestError(400, "request body must be a JSON object")
+            if not self.server.lock.acquire(blocking=False):
+                raise RequestError(409, "this sandbox is busy")
+            try:
+                result = run_job(self.server.config, payload)
+            finally:
+                self.server.lock.release()
+        except RequestError as exc:
+            self.reply(exc.status, {"error": str(exc)}); return
+        except json.JSONDecodeError:
+            self.reply(400, {"error": "request body must be JSON"}); return
+        except OSError as exc:
+            self.reply(500, {"error": f"runner failure: {exc}"}); return
+        self.reply(200, result)
+
+
+def make_server(address, *, work_root: Path, out_root: Path, scratch_root: Path,
+                sweep_all: bool = False, quiet: bool = False):
+    server = ThreadingHTTPServer(address, Handler)
+    server.daemon_threads = True
+    server.lock = threading.Lock()
+    server.config = {
+        "work_root": Path(work_root), "out_root": Path(out_root),
+        "scratch_root": Path(scratch_root), "sweep_all": sweep_all, "quiet": quiet,
+    }
+    return server
+
+
+def main() -> int:
+    if not O_NOFOLLOW or not O_DIRECTORY:
+        print("sandbox-runner: platform has no O_NOFOLLOW/O_DIRECTORY", file=sys.stderr)
+        return 3
+    if os.getuid() == 0:
+        print("sandbox-runner: refusing to run as root", file=sys.stderr)
+        return 3
+    server = make_server(
+        ("0.0.0.0", int(os.environ.get("SANDBOX_RUNNER_PORT", "8080"))),
+        work_root=Path(os.environ.get("SANDBOX_WORK_ROOT", "/work")),
+        out_root=Path(os.environ.get("SANDBOX_OUT_ROOT", "/out")),
+        scratch_root=Path(os.environ.get("SANDBOX_SCRATCH_ROOT", "/home/node/scratch")),
+        sweep_all=os.environ.get("SANDBOX_SWEEP_ALL") == "1",
+    )
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown).start())
+    print(f"sandbox-runner: listening on {server.server_address}", file=sys.stderr, flush=True)
+    server.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
