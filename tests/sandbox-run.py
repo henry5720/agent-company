@@ -139,6 +139,27 @@ def check_rejected_inputs(cli):
     code, _, _, requests = run(cli, [REPO + "/", "--", "true"], {"http://slot-a:8080": result(), "http://slot-b:8080": result()})
     check("trailing slash is accepted", code == 0 and json.loads(requests[0][0].data)["workspace"] == f"{KEY}/repos/teamsync-frontend")
 
+def check_thread_only(cli):
+    """附件轉換：不需要 thread workspace，只帶 channel 與 thread_ts。"""
+    plan = {"http://slot-a:8080": result(files=["brief.pdf.md"]), "http://slot-b:8080": result(files=["brief.pdf.md"])}
+    code, _, err, requests = run(cli, ["--thread", "C0123456789", "1710000000.123456", "--", "sandbox-attachment", "https://r2/x", "brief.pdf"], plan)
+    check("thread-only exits with the command code", code == 0, err)
+    body = json.loads(requests[0][0].data) if requests else {}
+    check("thread-only sends the thread key, no workspace", body.get("thread") == KEY and "workspace" not in body, str(body))
+    check("thread-only sends argv verbatim", body.get("argv") == ["sandbox-attachment", "https://r2/x", "brief.pdf"], str(body))
+    check("thread-only points at the bot-side out dir", f"/home/node/out/{KEY}/brief.pdf.md" in err, err)
+    _, _, _, with_repo = run(cli, [REPO, "--", "true"], plan)
+    check("thread-only uses the same slot preference as the repo", requests[0][0].full_url == with_repo[0][0].full_url)
+    for name, argv in [
+        ("thread plus repo", ["--thread", "C0123456789", "1710000000.123456", REPO, "--", "true"]),
+        ("bad channel", ["--thread", "evil", "1710000000.123456", "--", "true"]),
+        ("bad thread_ts", ["--thread", "C0123456789", "17100", "--", "true"]),
+        ("composed key", ["--thread", KEY, "--", "true"]),
+        ("neither", ["--", "true"]),
+    ]:
+        code, _, _, requests = run(cli, argv, {})
+        check(f"rejects {name}", code == 2 and not requests, str(code))
+
 
 def main():
     os.environ["SANDBOX_RUNNER_URLS"] = URLS
@@ -148,6 +169,7 @@ def main():
     check_slot_selection(cli)
     check_runner_rejection(cli)
     check_rejected_inputs(cli)
+    check_thread_only(cli)
     if failures:
         print("sandbox-run: failed", *failures, sep="\n  - ", file=sys.stderr); return 1
     print("sandbox-run checks passed (mocked runner; no real call was made)."); return 0

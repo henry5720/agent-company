@@ -5,12 +5,15 @@ ARG SANDBOX_NODE_IMAGE
 FROM ${SANDBOX_NODE_IMAGE}
 
 ARG PLAYWRIGHT_VERSION
+# 附件轉換工具的版本；工具本身不預裝，job 執行時由 sandbox-attachment 現裝（#28）。
+ARG OFFICEPARSER_VERSION
 
 # root 只在 build 用：Playwright 的 --with-deps 要 apt。apt 不逐一釘版，跟著 base digest 走。
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -eu; \
     test -n "${PLAYWRIGHT_VERSION}"; \
+    test -n "${OFFICEPARSER_VERSION}"; \
     npm install -g "playwright@${PLAYWRIGHT_VERSION}"; \
     test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}"; \
     playwright install --with-deps chromium; \
@@ -22,6 +25,7 @@ RUN corepack enable \
 
 COPY --chmod=0755 runner /usr/local/bin/sandbox-runner
 COPY --chmod=0755 sandbox-screenshot /usr/local/bin/sandbox-screenshot
+COPY --chmod=0755 sandbox-attachment /usr/local/bin/sandbox-attachment
 
 # scratch 與 pnpm store 由 Compose 掛 named volume（每格一個 scratch、兩格共用 store）；
 # 先建好目錄讓新 volume 繼承 node 的 ownership。
@@ -35,6 +39,7 @@ RUN install -d -o node -g node /home/node/scratch /home/node/.pnpm-store /home/n
 # Tailwind 40 次 vite RSS 穩定在 1.5–1.6 GB。
 ENV SANDBOX_SWEEP_ALL=1 \
     GOMEMLIMIT=1GiB \
+    OFFICEPARSER_VERSION=${OFFICEPARSER_VERSION} \
     SANDBOX_RUNNER_PORT=8080 \
     SANDBOX_WORK_ROOT=/work \
     SANDBOX_OUT_ROOT=/out \

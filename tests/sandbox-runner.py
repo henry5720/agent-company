@@ -93,16 +93,19 @@ def check_no_token_reaches_job(h):
     os.environ["SLACK_BOT_TOKEN"] = "xoxb-test-not-a-secret"
     os.environ["COMPANY_GATEWAY_API_KEY"] = "sk-test-not-a-secret"
     os.environ["GOMEMLIMIT"] = "1GiB"
+    os.environ["OFFICEPARSER_VERSION"] = "8.3.0"
     try:
         status, body = run(h, "env")
     finally:
         del os.environ["SLACK_BOT_TOKEN"], os.environ["COMPANY_GATEWAY_API_KEY"], os.environ["GOMEMLIMIT"]
+        del os.environ["OFFICEPARSER_VERSION"]
     output = body.get("output", "")
     check("env run returns 200", status == 200, str(body))
     check("job never sees SLACK_BOT_TOKEN", "xoxb-test" not in output and "SLACK_" not in output, output)
     check("job never sees gateway key", "sk-test" not in output and "COMPANY_" not in output, output)
     check("job gets OUT_DIR", f"OUT_DIR={h.out / KEY}" in output, output)
     check("esbuild memory cap reaches the job", "GOMEMLIMIT=1GiB" in output, output)
+    check("pinned attachment converter version reaches the job", "OFFICEPARSER_VERSION=8.3.0" in output, output)
     check("dev server never tries to open a browser", "BROWSER=none" in output, output)
     check("job runs with CI=1 so repo prepare hooks skip husky", "CI=1" in output, output)
 
@@ -192,6 +195,29 @@ def check_workspace_untouched(h):
     check("workspace source unchanged", (source / "src" / "app.css").read_text() == before)
     check("workspace .git/hooks not planted", not (source / ".git" / "hooks").exists())
 
+def check_thread_only_job(h):
+    """附件轉換不需要 repo：只帶 thread，在空的暫存目錄跑、寫 out/<key>/，不動那格的 scratch。"""
+    h.repo()
+    run(h, "mkdir -p node_modules && touch node_modules/kept")
+    third_key = "C0123456789-1710000777.000001"
+    status, body = h.post({"thread": third_key, "argv": ["sh", "-c", 'ls -A; pwd; echo text > "$OUT_DIR/brief.pdf.md"']})
+    check("thread-only job returns 200", status == 200, f"{status} {body}")
+    output = body.get("output", "")
+    lines = output.splitlines()
+    check("thread-only job starts in an empty directory inside scratch", len(lines) == 1 and lines[0].startswith(str(h.scratch) + "/"), output)
+    check("thread-only job writes to its own out dir", (h.out / third_key / "brief.pdf.md").exists(), str(list(h.out.iterdir())))
+    check("thread-only job lists the file", body.get("files") == ["brief.pdf.md"] and body.get("out_key") == third_key, str(body))
+    check("thread-only temp dir is removed afterwards", not [p for p in h.scratch.iterdir() if p.name.startswith("thread-")], str(list(h.scratch.iterdir())))
+    status, body = run(h, "ls node_modules; true")
+    check("thread-only job keeps the repo thread's node_modules", "kept" in body.get("output", ""), body.get("output", ""))
+    for name, payload in [
+        ("bad thread key", {"thread": "evil", "argv": ["true"]}),
+        ("thread and workspace together", {"thread": KEY, "workspace": f"{KEY}/repos/frontend", "argv": ["true"]}),
+        ("thread with slash", {"thread": f"{KEY}/repos", "argv": ["true"]}),
+    ]:
+        status, _ = h.post(payload)
+        check(f"rejects {name} with 400", status == 400, str(status))
+
 
 def main():
     runner = load()
@@ -206,6 +232,7 @@ def main():
         check_rejected_inputs(h)
         check_scratch_reuse(h)
         check_workspace_untouched(h)
+        check_thread_only_job(h)
     finally:
         h.close(); shutil.rmtree(root, ignore_errors=True)
     if failures:
