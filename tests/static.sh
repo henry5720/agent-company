@@ -18,6 +18,7 @@ test -x "$ROOT/agents/bin/parse-document"
 test -x "$ROOT/agents/bin/sandbox-run"
 test -x "$ROOT/sandbox/runner"
 test -x "$ROOT/sandbox/sandbox-screenshot"
+test -x "$ROOT/agents/bin/thread-workspace"
 
 python3 - "$ROOT" <<'PY'
 import json, os, pathlib, re, subprocess, tomllib
@@ -147,6 +148,7 @@ fi
 "$ROOT/tests/provider-route.py"
 "$ROOT/tests/sandbox-runner.py"
 "$ROOT/tests/sandbox-run.py"
+"$ROOT/tests/thread-workspace.py"
 
 if ((${#LIMITED[@]})); then
   printf 'LIMITED VERIFICATION\n'
