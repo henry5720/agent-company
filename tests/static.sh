@@ -275,6 +275,19 @@ if grep -R -n -i -E 'opencode|oh-my-opencode|claude-agent-acp|parse-document|doc
   exit 1
 fi
 
+# spec #21 §5、§8（#33）：清理與告警都要真的排進 crontab，不能只寫在文件。
+# render_crontab 就是 install-sync-cron.sh 寫進去的那份文字。
+crontab_text=$(bash -c 'source "$1/scripts/lib.sh"; render_crontab "$1" /snapshots' _ "$ROOT")
+for required in 'scripts/cleanup-artifacts.sh # work-agent-artifact-cleanup' \
+  'scripts/cleanup-workspaces.sh # work-agent-workspace-cleanup' \
+  'scripts/prune-pnpm-store.sh # work-agent-pnpm-prune' \
+  'scripts/alerts.sh # work-agent-alerts'; do
+  grep -Fq -- "$required" <<<"$crontab_text" || { echo "render_crontab is missing: $required" >&2; exit 1; }
+done
+grep -Fq 'thread-workspace cleanup' "$ROOT/scripts/cleanup-workspaces.sh"
+grep -Fq 'sandbox-runner cleanup-out' "$ROOT/scripts/cleanup-workspaces.sh"
+grep -Fq '/home/node/code/agent-config/skills/slack-list/scripts/slack-list' "$ROOT/scripts/cleanup-artifacts.sh"
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   (cd "$ROOT" && docker compose config --quiet)
 else
@@ -288,6 +301,9 @@ fi
 "$ROOT/tests/sandbox-run.py"
 "$ROOT/tests/sandbox-attachment.py"
 "$ROOT/tests/thread-workspace.py"
+"$ROOT/tests/thread-workspace-cleanup.py"
+"$ROOT/tests/host-cron.py"
+"$ROOT/tests/host-alerts.py"
 "$ROOT/tests/host-network.py"
 if [[ -z ${CADDY_BIN:-} ]] && ! command -v caddy work-agent-caddy >/dev/null 2>&1; then
   limited 'host proxy live route test (no caddy binary; install-host-network.sh puts work-agent-caddy on PATH)'

@@ -19,7 +19,12 @@
 #      這一步**不會**把 key 從 env/openab.env 拿掉：舊 bot 還在用，切換當晚才拿（§12）。
 #   4. 建 Docker network work-agent-net（external，enable_icc=false，固定 subnet 與 bridge 名）。
 #      已存在就比對設定，不符就停下，不自動重建（重建會把接在上面的 container 斷線）。
-#   5. 裝兩個 systemd unit，enable 並（重新）啟動。
+#   5. 建 system user／group `work-agent-proxy`（Caddy 用，沒有 shell、沒有 home），並把執行
+#      sudo 的使用者（SUDO_USER；可用 WORK_AGENT_LOG_READER 指定）加進該 group，讓 host
+#      告警 cron 讀得到 access log（#33）。新 group 對之後啟動的 cron job 生效，不必重新登入。
+#   6. 裝兩個 systemd unit，enable 並（重新）啟動；把既有 access log 調成 0640。
+#      從舊版 DynamicUser 升級時，systemd 會把 /var/log/private/work-agent-proxy 搬回
+#      /var/log/work-agent-proxy 並改 owner。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -115,6 +120,28 @@ ensure_network() {
   [[ $got == "$want" ]] || die "network $name is '$got', expected '$want'; fix by hand (recreating disconnects containers)"
 }
 
+PROXY_USER=work-agent-proxy
+LOG_DIR=/var/log/$PROXY_USER
+
+ensure_proxy_user() {
+  local reader=${WORK_AGENT_LOG_READER:-${SUDO_USER:-}}
+  if ! getent passwd "$PROXY_USER" >/dev/null; then
+    useradd --system --user-group --no-create-home --home-dir /nonexistent \
+      --shell /usr/sbin/nologin "$PROXY_USER"
+  fi
+  if [[ -n $reader && $reader != root ]]; then
+    usermod -aG work-agent-proxy "$reader"
+  else
+    echo "no SUDO_USER: add the alert cron user by hand: usermod -aG $PROXY_USER <user>"
+  fi
+}
+
+# Caddy 的 `mode 0640` 只管新開的檔；舊版（DynamicUser）留下的 0600 檔要補一次。
+fix_log_modes() {
+  [[ -d $LOG_DIR && ! -L $LOG_DIR ]] || return 0
+  find "$LOG_DIR" -maxdepth 1 -type f -name 'access*' -exec chmod 0640 {} +
+}
+
 install_units() {
   install -m 0644 "$ROOT/config/systemd/work-agent-firewall.service" /etc/systemd/system/
   install -m 0644 "$ROOT/config/systemd/work-agent-proxy.service" /etc/systemd/system/
@@ -134,7 +161,9 @@ case ${1:-} in
     install_caddy
     install_files
     ensure_network
+    ensure_proxy_user
     install_units
+    fix_log_modes
     /usr/local/sbin/work-agent-firewall check
     systemctl --no-pager --lines=5 status work-agent-proxy.service
     ;;

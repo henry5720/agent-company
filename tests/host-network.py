@@ -378,6 +378,7 @@ def test_caddyfile_contract():
     check("JSON access log", re.search(r"^\s*format json\s*$", code, re.M))
     check("log kept 14 days", re.search(r"^\s*roll_keep_for 336h\s*$", code, re.M))
     check("log rolls daily so old lines can expire", re.search(r"^\s*roll_interval 24h\s*$", code, re.M))
+    check("log files are group-readable for the alert cron", re.search(r"^\s*mode 0640\s*$", code, re.M))
     check("only POST /responses is routed", re.findall(r"^\s*path (.+)$", code, re.M) == ["/responses"]
           and re.findall(r"^\s*method (.+)$", code, re.M) == ["POST"])
     check("key only from env placeholder", "{env.COMPANY_GATEWAY_API_KEY}" in code
@@ -551,7 +552,15 @@ def test_install_wiring():
           and "ln -sfn \"$dest/caddy\" /usr/local/bin/work-agent-caddy" in installer)
     check("proxy key only via EnvironmentFile",
           "EnvironmentFile=/etc/work-agent/gateway.env" in proxy_unit and "API_KEY" not in proxy_unit)
-    check("proxy runs unprivileged", "DynamicUser=yes" in proxy_unit and "LogsDirectory=work-agent-proxy" in proxy_unit)
+    # #33：告警 cron 要讀 access log。DynamicUser 會把 LogsDirectory 放進 root 0700 的
+    # /var/log/private/，非 root 讀不到；改成固定 system user＋group，cron 使用者加進該 group。
+    check("proxy runs as its own unprivileged user",
+          re.search(r"^User=work-agent-proxy$", proxy_unit, re.M) and re.search(r"^Group=work-agent-proxy$", proxy_unit, re.M)
+          and not re.search(r"^DynamicUser=yes", proxy_unit, re.M) and "LogsDirectory=work-agent-proxy" in proxy_unit)
+    check("log directory is group-readable", re.search(r"^LogsDirectoryMode=0750$", proxy_unit, re.M))
+    check("installer creates the proxy system user",
+          "useradd --system" in installer and "work-agent-proxy" in installer)
+    check("installer lets the cron user read the log", "usermod -aG work-agent-proxy" in installer)
     check("installer verifies checksum", "sha512sum -c" in installer)
     check("network created with icc disabled", "com.docker.network.bridge.enable_icc=false" in installer)
     check("installer never touches br_netfilter", "modprobe" not in installer)

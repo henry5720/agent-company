@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""測試用的假 `docker`：tests/host-cron.py 與 tests/host-alerts.py 放在 PATH 最前面。
+
+只實作 host 排程會用到的兩種呼叫，其他一律 exit 99（測試會看到）：
+
+- `docker compose -f <file> exec -T [-w <dir>] <service> <cmd...>`
+  - FAKE_DOCKER_CANNED（JSON）：`{"<service> <cmd 開頭>": {"stdout": "...", "exit": N}}`，
+    最長的前綴先比對；比對到就印 stdout、回 exit。
+  - 否則若 FAKE_DOCKER_PATHMAP（JSON：container 路徑前綴 → host tmp 目錄）有對應，
+    把參數裡的路徑換成 tmp 目錄後**真的在本機執行**指令（用來驗 find 的刪除規則）。
+- `docker inspect <name>...`：從 FAKE_DOCKER_INSPECT（JSON 檔）取，找不到的 name 印
+  錯誤到 stderr、整體 exit 1（跟真的 docker 一樣，找得到的仍印出來）。
+
+每次呼叫都把 argv 以 JSON 一行附加到 FAKE_DOCKER_LOG。
+"""
+import json
+import os
+import subprocess
+import sys
+
+argv = sys.argv[1:]
+with open(os.environ["FAKE_DOCKER_LOG"], "a") as log:
+    log.write(json.dumps(argv) + "\n")
+
+if argv[:1] == ["inspect"]:
+    with open(os.environ["FAKE_DOCKER_INSPECT"]) as f:
+        known = json.load(f)
+    found, missing = [], []
+    for name in argv[1:]:
+        (found.append(known[name]) if name in known else missing.append(name))
+    print(json.dumps(found))
+    for name in missing:
+        print(f"Error: No such object: {name}", file=sys.stderr)
+    sys.exit(1 if missing else 0)
+
+if argv[:1] == ["compose"] and "exec" in argv:
+    rest = argv[argv.index("exec") + 1:]
+    while rest and rest[0].startswith("-"):
+        flag = rest.pop(0)
+        if flag in ("-w", "--workdir", "-u", "--user"):
+            rest.pop(0)
+    service, cmd = rest[0], rest[1:]
+    canned = json.loads(os.environ.get("FAKE_DOCKER_CANNED", "{}"))
+    joined = " ".join([service, *cmd])
+    for prefix in sorted(canned, key=len, reverse=True):
+        if joined.startswith(prefix):
+            reply = canned[prefix]
+            sys.stdout.write(reply.get("stdout", ""))
+            sys.stderr.write(reply.get("stderr", ""))
+            sys.exit(reply.get("exit", 0))
+    pathmap = json.loads(os.environ.get("FAKE_DOCKER_PATHMAP", "{}"))
+    if pathmap:
+        def rewrite(arg):
+            for src, dst in pathmap.items():
+                if arg == src or arg.startswith(src + "/"):
+                    return dst + arg[len(src):]
+            return arg
+        sys.exit(subprocess.run([rewrite(a) for a in cmd]).returncode)
+    print(f"fake docker: no canned reply for {joined!r}", file=sys.stderr)
+    sys.exit(98)
+
+print(f"fake docker: unsupported call {argv!r}", file=sys.stderr)
+sys.exit(99)

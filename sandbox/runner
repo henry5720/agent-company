@@ -18,6 +18,9 @@
    process 也一起殺：這個 container 只有 runner 和它的 job。
 5. 只回傳 out/<key>/ 底下的檔名；檔案本身由 bot 唯讀掛載 out 後自己讀。
 
+另一個入口 `sandbox-runner cleanup-out`：host cron 每小時 `docker compose exec` 進來跑，
+刪 out 底下超過 24 小時的產物（spec #21 §5；#33）。out 對 bot 唯讀，只有 sandbox 刪得掉。
+
 thread workspace 是唯讀掛載，這是邊界；runner 的路徑檢查只是讓錯誤早點、清楚地
 發生。指令本身不設限（spec §6）。
 """
@@ -46,6 +49,7 @@ MAX_TIMEOUT_SECONDS = 15 * 60
 OUTPUT_TAIL_BYTES = 32 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_ARGV_ITEMS = 256
+OUT_MAX_AGE_SECONDS = 24 * 3600
 THREAD_MARKER = ".sandbox-thread"
 PRESERVED_DIRS = {"node_modules"}
 SKIPPED_SOURCE = {".git", "node_modules"}
@@ -369,7 +373,82 @@ def make_server(address, *, work_root: Path, out_root: Path, scratch_root: Path,
     return server
 
 
-def main() -> int:
+def newest_mtime(dir_fd: int, name: str) -> float:
+    """entry 本身與（若是真目錄）底下所有東西最新的 mtime；symlink 只看自己。"""
+    st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    newest = st.st_mtime
+    if stat.S_ISDIR(st.st_mode):
+        for _, dirnames, filenames, sub_fd in os.fwalk(name, dir_fd=dir_fd, follow_symlinks=False):
+            for entry in dirnames + filenames:
+                try:
+                    newest = max(newest, os.stat(entry, dir_fd=sub_fd, follow_symlinks=False).st_mtime)
+                except FileNotFoundError:
+                    pass
+    return newest
+
+
+def remove_at(dir_fd: int, name: str) -> None:
+    """用 parent fd 刪；真目錄 rmtree（帶 dir_fd 不跟 symlink），其餘 unlink。"""
+    if stat.S_ISDIR(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode):
+        shutil.rmtree(name, dir_fd=dir_fd)
+    else:
+        os.unlink(name, dir_fd=dir_fd)
+
+
+def cleanup_out(out_root: Path, now: float | None = None) -> int:
+    """out/<key>/ 底下 24 小時沒動的東西刪掉；整個 key 都 24 小時沒動就連目錄一起刪。
+
+    只看名字符合 `<channel>-<thread_ts>` 的真目錄（O_NOFOLLOW 開），其他不碰。
+    回傳刪掉的 entry 數。
+    """
+    now = time.time() if now is None else now
+    cutoff = now - OUT_MAX_AGE_SECONDS
+    removed = 0
+    root_fd = os.open(out_root, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    try:
+        for key in sorted(os.listdir(root_fd)):
+            if not KEY_PATTERN.fullmatch(key):
+                continue
+            if not stat.S_ISDIR(os.stat(key, dir_fd=root_fd, follow_symlinks=False).st_mode):
+                continue  # symlink 或不是目錄：不跟。
+            # 整個 key 都舊了就整個刪（逐一刪檔會把目錄 mtime 更新成現在）。
+            if newest_mtime(root_fd, key) < cutoff:
+                shutil.rmtree(key, dir_fd=root_fd)
+                removed += 1
+                continue
+            try:
+                key_fd = os.open(key, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW, dir_fd=root_fd)
+            except OSError:
+                continue  # 掃描後被換成 symlink：不跟。
+            try:
+                for name in sorted(os.listdir(key_fd)):
+                    if newest_mtime(key_fd, name) < cutoff:
+                        remove_at(key_fd, name)
+                        removed += 1
+            finally:
+                os.close(key_fd)
+    finally:
+        os.close(root_fd)
+    return removed
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["cleanup-out"]:
+        if len(argv) != 1:
+            print("sandbox-runner: usage: sandbox-runner cleanup-out", file=sys.stderr)
+            return 2
+        out_root = Path(os.environ.get("SANDBOX_OUT_ROOT", "/out"))
+        try:
+            removed = cleanup_out(out_root)
+        except OSError as exc:
+            print(f"sandbox-runner: cleanup-out failed: {exc}", file=sys.stderr)
+            return 3
+        print(f"cleanup-out: removed {removed} entries older than 24h from {out_root}")
+        return 0
+    if argv:
+        print("sandbox-runner: usage: sandbox-runner [cleanup-out]", file=sys.stderr)
+        return 2
     if not O_NOFOLLOW or not O_DIRECTORY:
         print("sandbox-runner: platform has no O_NOFOLLOW/O_DIRECTORY", file=sys.stderr)
         return 3

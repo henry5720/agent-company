@@ -377,10 +377,12 @@ def call_gateway(body: dict) -> bytes:
     request = Request(
         endpoint,
         data=json.dumps(body).encode("utf-8"),
-        # 固定兩個 header，沒有 --header 這種東西。
+        # 固定三個 header，沒有 --header 這種東西。User-Agent 讓 host 告警從 proxy 的
+        # access log 分出生圖請求（scripts/alerts.py 的 IMAGE_USER_AGENT），改這裡要一起改。
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
+            "User-Agent": "work-agent-company-image",
         },
         method="POST",
     )

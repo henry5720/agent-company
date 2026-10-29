@@ -36,6 +36,9 @@
 			roll_size 100MiB
 			roll_keep 1000
 			roll_keep_for 336h
+			# 0640＋unit 的 Group=work-agent-proxy：host 告警 cron（scripts/alerts.py）的使用者
+			# 在這個 group 裡，讀得到 log、寫不了（#33）。
+			mode 0640
 		}
 		format json
 	}

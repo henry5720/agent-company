@@ -7,6 +7,9 @@
 # - bind 位址是 work-agent-net 的 bridge IP，Docker 起來才有，所以排在 docker.service 之後；
 #   萬一 bridge 還沒建好就失敗重試。
 # - access log 在 /var/log/work-agent-proxy/access.log（LogsDirectory=，Caddy 自己輪替 14 天）。
+# - 固定 system user `work-agent-proxy`（install-host-network.sh 建），不用 DynamicUser：
+#   DynamicUser 會把 LogsDirectory 放進 root 0700 的 /var/log/private/，host 告警 cron 讀不到。
+#   目錄 0750、log 檔 0640（Caddyfile `mode`），cron 使用者加進同名 group 後只讀（#33）。
 [Unit]
 Description=work-agent host proxy to the company gateway (Caddy)
 After=docker.service work-agent-firewall.service network-online.target
@@ -20,7 +23,8 @@ ExecStart=/usr/local/bin/work-agent-caddy run --config /etc/work-agent/Caddyfile
 Restart=on-failure
 RestartSec=5s
 
-DynamicUser=yes
+User=work-agent-proxy
+Group=work-agent-proxy
 StateDirectory=work-agent-proxy
 LogsDirectory=work-agent-proxy
 LogsDirectoryMode=0750
@@ -28,6 +32,9 @@ Environment=HOME=/var/lib/work-agent-proxy
 Environment=XDG_DATA_HOME=/var/lib/work-agent-proxy
 Environment=XDG_CONFIG_HOME=/var/lib/work-agent-proxy
 NoNewPrivileges=yes
+# DynamicUser 原本隱含的隔離，改固定 user 後明寫。
+RemoveIPC=yes
+RestrictSUIDSGID=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 ProtectSystem=strict

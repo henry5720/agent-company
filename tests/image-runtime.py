@@ -248,9 +248,15 @@ def main() -> int:
                 "Content-Type is JSON",
                 request.get_header("Content-type") == "application/json",
             )
+            # User-Agent 固定，host 告警靠它從 Caddy access log 數生圖請求（scripts/alerts.py）。
             check(
-                "only the two fixed headers are sent",
-                {k.lower() for k in request.headers} == {"authorization", "content-type"},
+                "User-Agent marks the request as company-image",
+                request.get_header("User-agent") == "work-agent-company-image",
+                str(request.get_header("User-agent")),
+            )
+            check(
+                "only the three fixed headers are sent",
+                {k.lower() for k in request.headers} == {"authorization", "content-type", "user-agent"},
                 str(sorted(request.headers)),
             )
             check("timeout is set", gateway.timeouts[0] == cli.REQUEST_TIMEOUT_SECONDS)

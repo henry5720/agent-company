@@ -522,6 +522,48 @@ sudo work-agent-firewall remove
 docker network rm work-agent-net          # 只有沒有 container 接在上面時
 ```
 
+### 清理與告警排程
+
+spec #21 §5、§8。全部由 `scripts/lib.sh` 的 `render_crontab` 產生、`./scripts/install-sync-cron.sh`
+一起寫進 crontab；刪除一律 `docker compose exec` 進擁有該目錄的 container 做，不從 host 直接刪。
+
+| Marker | 時間 | 做什麼 | log（`~/.local/state/work-agent/`） |
+|---|---|---|---|
+| `# work-agent-artifact-cleanup` | 每小時 :17 | bot 內 `slack-list cleanup`（drafts 24h）＋ 刪 `CODEX_HOME/sessions` 超過 7 天的 `rollout-*.jsonl`（`log/`、sqlite 不動）＋ 量 `CODEX_HOME` | `artifact-cleanup.log` |
+| `# work-agent-workspace-cleanup` | 每小時 :27 | bot 內 `thread-workspace cleanup`（7 天／20 GB，被刪的 thread 收到通知）＋ sandbox 內 `sandbox-runner cleanup-out`（out 24h） | `workspace-cleanup.log` |
+| `# work-agent-pnpm-prune` | 週日 04:37 | sandbox 內用各 snapshot repo 釘的 pnpm 版本跑 `pnpm store prune` | `pnpm-prune.log` |
+| `# work-agent-alerts` | 每小時 :47 | `scripts/alerts.py`：四類告警，發到維護者私人 channel | `alerts.log` |
+
+告警只送 Slack Incoming Webhook，不經 bot。首次部署（或換 webhook）時維護者本人做：
+
+1. 在 agent-runner 那個 Slack app 的 **Incoming Webhooks** 另加一個 webhook，channel 選自己的私人
+   channel；跟 agent-runner 原本那個分開，外流時只撤這一個。
+2. URL 寫到 deployment host 上 cron 使用者的檔案，**不要**放進 repo、`.env` 或 `env/openab.env`：
+
+   ```bash
+   install -d -m 0700 ~/.config/work-agent
+   (umask 077 && read -rsp 'webhook URL: ' url && printf '%s\n' "$url" > ~/.config/work-agent/alert-webhook)
+   ```
+
+   權限比 0600 寬，`alerts.py` 會拒絕送出。路徑要換就在 repo 的 `.env` 設
+   `WORK_AGENT_ALERT_WEBHOOK_FILE`。
+3. 讓 cron 使用者讀得到 host proxy 的 access log：重跑 `sudo ./scripts/install-host-network.sh install`。
+   它會建 system user `work-agent-proxy`（取代原本的 DynamicUser；DynamicUser 的 log 在 root 0700 的
+   `/var/log/private/` 底下，非 root 讀不到）、把執行 sudo 的使用者加進 `work-agent-proxy` group，
+   並把既有 log 調成 0640。確認：
+
+   ```bash
+   id -nG | tr ' ' '\n' | grep -x work-agent-proxy     # 新的登入 shell 才看得到；cron 不必重登
+   sg work-agent-proxy -c 'tail -n1 /var/log/work-agent-proxy/access.log' | jq -c .request.uri
+   ```
+
+4. `./scripts/install-sync-cron.sh` 重裝 crontab，`crontab -l | grep work-agent-` 應該有 5 行。
+5. 手動跑一次 `./scripts/alerts.sh`，`alerts.log` 最後一行是 `no alerts` 或 `delivered N alert(s)`；
+   出現 `FAILED` 就是 webhook 檔或 log 權限沒弄好。
+
+告警內容與門檻見 `scripts/alerts.py` 檔頭。`/responses` 用量告警在 log 累積滿 7 天前只記錄；
+`thread workspace`／`CODEX_HOME` 大小超過 3 小時沒回報本身也會告警（代表清理排程沒在跑）。
+
 ### 人工 release gate
 
 `tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、runtime 版本對、

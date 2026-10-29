@@ -2,6 +2,7 @@
 """給 agent 一份這個 Slack thread 專屬、可寫的 repo 工作副本。
 
 用法：`thread-workspace <channel_id> <thread_ts> <repo>`，成功時 stdout 只印一行路徑。
+清理：`thread-workspace cleanup`（host cron 每小時 `docker compose exec` 進來跑，見 `cleanup()`）。
 
 路徑由這支 helper 組成 `WORK_ROOT/<channel_id>-<thread_ts>/repos/<repo>/`，不讓 LLM
 自己拼。channel 與 thread_ts 來自 OpenAB 放進 prompt 的 <sender_context>，跟
@@ -21,12 +22,18 @@ symlink，結果是失敗，不是寫到 root 外面。
 from __future__ import annotations
 
 import errno
+import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 WORK_ROOT = Path("/home/node/work")
 SNAPSHOT_ROOT = Path("/home/node/code")
@@ -37,6 +44,15 @@ REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 EXIT_INVALID_INPUT = 2
 EXIT_RUNTIME = 3
 CLONE_TIMEOUT_SECONDS = 600
+# spec #21 §5：最後修改超過 7 天刪；總量超過 20 GB 從最久沒動的刪起。host 告警
+# （scripts/alerts.py 的 THREAD_WORKSPACE_LIMIT_BYTES）用同一個上限，改這裡要一起改。
+MAX_AGE_SECONDS = 7 * 86400
+MAX_TOTAL_BYTES = 20 * 1024 ** 3
+KEY_PATTERN = re.compile(r"^([CDG][A-Z0-9]{8,32})-([0-9]{10,13}\.[0-9]{1,9})$")
+TRASH_PREFIX = ".cleanup-"
+SLACK_API = "https://slack.com/api"
+SLACK_TIMEOUT_SECONDS = 15
+NOTICE = "工作副本已清除，再改會從最新 snapshot 重來"
 
 O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
@@ -208,7 +224,137 @@ def workspace(channel: str, thread_ts: str, repo: str) -> Path:
     return path
 
 
+def scan(root_fd: int, name: str) -> tuple[os.stat_result, float, int]:
+    """回傳 thread 目錄本身的 lstat、整棵樹最新的 mtime、佔用 bytes。
+
+    「最後修改」看整棵樹：agent 只改深層檔案時，頂層目錄的 mtime 不會變。
+    fwalk 帶 dir_fd、follow_symlinks=False：symlink 只 lstat 自己，不走進去。
+    """
+    top = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    newest, used = top.st_mtime, top.st_blocks * 512
+    for _, dirnames, filenames, dir_fd in os.fwalk(name, dir_fd=root_fd, follow_symlinks=False):
+        for entry in dirnames + filenames:
+            try:
+                st = os.stat(entry, dir_fd=dir_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            newest = max(newest, st.st_mtime)
+            used += st.st_blocks * 512
+    return top, newest, used
+
+
+def remove_thread(root_fd: int, name: str, seen: os.stat_result) -> None:
+    """同一個 root fd 裡先比對 identity、改名成暫存名，再 rmtree 那個暫存名。
+
+    改名之後 `thread-workspace <channel> <ts>` 不會撿到刪一半的目錄；identity 不符
+    （掃描後被換掉，例如換成 symlink）就不刪。rmtree 帶 dir_fd 不跟 symlink。
+    """
+    current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (seen.st_dev, seen.st_ino):
+        raise RuntimeFailure(f"{name} changed while cleaning; left in place")
+    trash = f"{TRASH_PREFIX}{name}-{os.getpid()}"
+    os.rename(name, trash, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+    shutil.rmtree(trash, dir_fd=root_fd)
+
+
+def notify(key: str, token: str) -> None:
+    channel, thread_ts = KEY_PATTERN.fullmatch(key).groups()
+    if not token:
+        raise RuntimeFailure("SLACK_BOT_TOKEN is not set")
+    request = Request(
+        f"{SLACK_API}/chat.postMessage",
+        data=urlencode({"channel": channel, "thread_ts": thread_ts, "text": NOTICE}).encode("ascii"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=SLACK_TIMEOUT_SECONDS) as response:
+            result = json.loads(response.read())
+    except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeFailure(f"chat.postMessage failed: {exc}") from exc
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        reason = result.get("error", "invalid response") if isinstance(result, dict) else "invalid response"
+        raise RuntimeFailure(f"chat.postMessage rejected: {reason}")
+
+
+def cleanup() -> int:
+    """刪超過 7 天沒動的 thread workspace；總量仍超過上限就從最久沒動的刪起。
+
+    只看 WORK_ROOT 底下名字符合 `<channel_id>-<thread_ts>` 的真目錄；其他東西（含
+    symlink）不碰。每刪一個就在那個 thread 貼 NOTICE。通知失敗不會留著不刪（磁碟
+    優先），但整次 exit 非 0，讓 host cron 的 log 記成 FAILED。最後一行印
+    `remaining_bytes=<N>`，host 告警用它判斷「清完仍超過上限」。
+    """
+    require_secure_flags()
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    root_fd = open_root(WORK_ROOT)
+    problems = 0
+    try:
+        threads = []
+        for name in sorted(os.listdir(root_fd)):
+            if name.startswith(TRASH_PREFIX):
+                # 上一次刪到一半被中斷留下的暫存名：直接收掉，不再通知。
+                st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                if stat.S_ISDIR(st.st_mode):
+                    shutil.rmtree(name, dir_fd=root_fd)
+                continue
+            if not KEY_PATTERN.fullmatch(name):
+                continue
+            top, newest, used = scan(root_fd, name)
+            if not stat.S_ISDIR(top.st_mode):
+                print(f"skip {name}: not a real directory", file=sys.stderr)
+                continue
+            threads.append((newest, name, top, used))
+
+        now = time.time()
+        threads.sort()
+        total = sum(t[3] for t in threads)
+        doomed = []
+        for newest, name, top, used in threads:
+            if now - newest > MAX_AGE_SECONDS:
+                doomed.append((name, top, used, "age"))
+                total -= used
+        for newest, name, top, used in threads:
+            if total <= MAX_TOTAL_BYTES:
+                break
+            if any(d[0] == name for d in doomed):
+                continue
+            doomed.append((name, top, used, "size"))
+            total -= used
+
+        for name, top, used, reason in doomed:
+            try:
+                remove_thread(root_fd, name, top)
+            except (RuntimeFailure, OSError) as exc:
+                print(f"FAILED to remove {name}: {exc}", file=sys.stderr)
+                total += used
+                problems += 1
+                continue
+            print(f"removed {name} reason={reason} bytes={used}")
+            try:
+                notify(name, token)
+            except RuntimeFailure as exc:
+                print(f"FAILED to notify {name}: {exc}", file=sys.stderr)
+                problems += 1
+    finally:
+        os.close(root_fd)
+    print(f"remaining_bytes={max(total, 0)}")
+    return EXIT_RUNTIME if problems else 0
+
+
 def main(argv: list[str]) -> int:
+    if argv[:1] == ["cleanup"]:
+        if len(argv) != 1:
+            print("thread-workspace: usage: thread-workspace cleanup", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+        try:
+            return cleanup()
+        except RuntimeFailure as exc:
+            print(f"thread-workspace: {exc}", file=sys.stderr)
+            return EXIT_RUNTIME
     try:
         path = workspace(*validate(argv))
     except (InputError, RuntimeFailure) as exc:

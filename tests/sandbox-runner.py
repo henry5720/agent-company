@@ -7,8 +7,10 @@
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -219,6 +221,53 @@ def check_thread_only_job(h):
         check(f"rejects {name} with 400", status == 400, str(status))
 
 
+def check_cleanup_out(runner, root: Path):
+    """`sandbox-runner cleanup-out`：out 底下超過 24 小時的產物刪掉（spec #21 §5；#33）。
+
+    host cron `docker compose exec` 進 sandbox 跑；out 對 bot 唯讀，只有 sandbox 刪得掉。
+    """
+    out = root / "cleanup-out"; out.mkdir()
+    outside = root / "cleanup-outside"; outside.mkdir()
+    (outside / "keep.txt").write_text("outside\n")
+    day = 86400
+    old = time.time() - day - 600
+    fresh = time.time() - day + 600
+
+    def stamp(path, when):
+        os.utime(path, (when, when), follow_symlinks=False)
+
+    stale = out / KEY; stale.mkdir()
+    (stale / "shot.png").write_bytes(b"png"); stamp(stale / "shot.png", old); stamp(stale, old)
+    mixed = out / OTHER_KEY; mixed.mkdir()
+    (mixed / "old.png").write_bytes(b"o"); stamp(mixed / "old.png", old)
+    (mixed / "new.png").write_bytes(b"n"); stamp(mixed / "new.png", fresh)
+    (mixed / "nested").mkdir(); (mixed / "nested" / "a.md").write_text("x"); stamp(mixed / "nested" / "a.md", old); stamp(mixed / "nested", old)
+    (mixed / "link").symlink_to(outside, target_is_directory=True); stamp(mixed / "link", old)
+    linked_key = "C0123456789-1710000777.000001"
+    (out / linked_key).symlink_to(outside, target_is_directory=True); stamp(out / linked_key, old)
+    (out / "README").write_text("not a key\n"); stamp(out / "README", old)
+
+    saved = os.environ.get("SANDBOX_OUT_ROOT")
+    os.environ["SANDBOX_OUT_ROOT"] = str(out)
+    quiet = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+            code = runner.main(["cleanup-out"])
+            extra_args = runner.main(["cleanup-out", "x"])
+    finally:
+        if saved is None: os.environ.pop("SANDBOX_OUT_ROOT", None)
+        else: os.environ["SANDBOX_OUT_ROOT"] = saved
+    check("cleanup-out exits 0", code == 0, f"code={code}")
+    check("out dir with only stale files removed entirely", not stale.exists())
+    check("stale file in a live out dir removed", not (mixed / "old.png").exists())
+    check("fresh file kept", (mixed / "new.png").exists())
+    check("stale nested dir removed", not (mixed / "nested").exists())
+    check("stale symlink removed without following it", not (mixed / "link").is_symlink() and (outside / "keep.txt").exists())
+    check("symlinked key dir not followed", (outside / "keep.txt").exists())
+    check("non-key entries left alone", (out / "README").exists())
+    check("cleanup-out takes no extra args", extra_args == 2)
+
+
 def main():
     runner = load()
     root = Path(tempfile.mkdtemp(prefix="sandbox-runner-test-"))
@@ -233,6 +282,7 @@ def main():
         check_scratch_reuse(h)
         check_workspace_untouched(h)
         check_thread_only_job(h)
+        check_cleanup_out(runner, root)
     finally:
         h.close(); shutil.rmtree(root, ignore_errors=True)
     if failures:
