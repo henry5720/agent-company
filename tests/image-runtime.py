@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """agents/bin/company-image 的 mockable 測試。
 
-不連網、不需要 Docker、不需要真的 gateway key：`urlopen` 被換成一個會把
+不連網、不需要 Docker：`urlopen` 被換成一個會把
 `Request` 收下來的假物件，所以測得到「送出去的請求長什麼樣」。輸出目錄與允許的
 來源目錄也被指到 tmpdir，production 那份因此不必為了測試多開任何覆蓋參數。
 
 這份測的是 CLI 契約：請求 shape、兩種回應形狀（一般 JSON body 與
 `text/event-stream` 的 SSE）、PNG 輸出位置、以及不合法輸入一定被擋。它不能證明公司
-gateway 真的接受這個 shape，也不能證明它這次會回哪一種 —— 那要在有 key 的環境實打
-一次。
+gateway 真的接受這個 shape，也不能證明它這次會回哪一種 —— 那要經 host proxy
+實打一次。
+
+key 不在 container 裡（spec #21 §3）：host Caddy proxy 補上 Authorization，所以 CLI
+不讀 key、不送 Authorization header；proxy 走 bridge 上的 plain http。
 """
 
 from __future__ import annotations
@@ -31,8 +34,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CLI = ROOT / "agents/bin/company-image"
 
+# 放在 env 裡但 CLI 不該碰的 key：用來證明它不會被讀進請求或 stderr。
 FAKE_KEY = "test-key-not-a-real-secret"
-FAKE_BASE_URL = "https://gateway.example.invalid/v1"
+# production 的值（config/host-network.env）：bridge 上的 host proxy，plain http。
+FAKE_BASE_URL = "http://10.231.0.1:18080"
 
 # 「這個參數沒給」跟「給了 None」是兩件事：None 代表 gateway 漏掉 Content-Type。
 UNSET = object()
@@ -236,13 +241,13 @@ def main() -> int:
             request = gateway.requests[0]
             check(
                 "endpoint is base URL + /responses",
-                request.full_url == "https://gateway.example.invalid/v1/responses",
+                request.full_url == "http://10.231.0.1:18080/responses",
                 request.full_url,
             )
             check("method is POST", request.get_method() == "POST")
             check(
-                "Authorization header carries the env key",
-                request.get_header("Authorization") == f"Bearer {FAKE_KEY}",
+                "no Authorization header (the host proxy adds the key)",
+                request.get_header("Authorization") is None,
             )
             check(
                 "Content-Type is JSON",
@@ -255,8 +260,8 @@ def main() -> int:
                 str(request.get_header("User-agent")),
             )
             check(
-                "only the three fixed headers are sent",
-                {k.lower() for k in request.headers} == {"authorization", "content-type", "user-agent"},
+                "only the two fixed headers are sent (no Authorization; the proxy adds it)",
+                {k.lower() for k in request.headers} == {"content-type", "user-agent"},
                 str(sorted(request.headers)),
             )
             check("timeout is set", gateway.timeouts[0] == cli.REQUEST_TIMEOUT_SECONDS)
@@ -760,14 +765,7 @@ def main() -> int:
         # ------------------------------------------------------ bad env
         cli.urlopen = FakeGateway()
         for label, env, expected in (
-            ("missing key", {"COMPANY_GATEWAY_API_KEY": ""}, cli.EXIT_RUNTIME),
-            ("placeholder key", {"COMPANY_GATEWAY_API_KEY": "replace-me"}, cli.EXIT_RUNTIME),
             ("missing base URL", {"COMPANY_GATEWAY_BASE_URL": ""}, cli.EXIT_RUNTIME),
-            (
-                "plain http base URL",
-                {"COMPANY_GATEWAY_BASE_URL": "http://gateway.example.invalid/v1"},
-                cli.EXIT_RUNTIME,
-            ),
             (
                 "non-http base URL",
                 {"COMPANY_GATEWAY_BASE_URL": "file:///etc/passwd"},
@@ -785,13 +783,19 @@ def main() -> int:
                 else:
                     os.environ[key] = value
 
-        # localhost over http is the one http case the CLI allows, so the
-        # mockable test itself can point at a loopback gateway.
-        os.environ["COMPANY_GATEWAY_BASE_URL"] = "http://127.0.0.1:8080/v1"
+        # The key lives only in the host proxy: with no key in the env at all the
+        # CLI still calls the proxy, and never sends an Authorization header.
+        saved_key = os.environ.pop("COMPANY_GATEWAY_API_KEY", None)
         gateway = FakeGateway()
         cli.urlopen = gateway
-        code, out, err = run(cli, ["generate", "--prompt", "x", "--name", "loopback"])
-        check("http on loopback is allowed", code == 0, f"code={code} stderr={err.strip()}")
+        code, _, err = run(cli, ["generate", "--prompt", "x", "--name", "nokey"])
+        check("no key in env still generates", code == 0, f"code={code} stderr={err.strip()}")
+        check(
+            "no key in env sends no Authorization header",
+            bool(gateway.requests) and gateway.requests[0].get_header("Authorization") is None,
+        )
+        if saved_key is not None:
+            os.environ["COMPANY_GATEWAY_API_KEY"] = saved_key
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""受限 Slack artifact uploader 的離線契約測試；不會開 socket。"""
+"""受限 Slack artifact uploader 的離線契約測試；不會開 socket。
+
+來源 root 有三個（spec #21 §5、#24 決定 2、3）：drafts（bot 擁有，上傳成功就刪）、
+thread workspace `work`（HTML prototype 與 diff `.md`，由 `thread-workspace cleanup`
+7 天清，上傳後留著）、sandbox 的 `out`（bot 唯讀，由 sandbox runner 24 小時清）。
+"""
 from __future__ import annotations
 
 import base64
@@ -230,6 +235,56 @@ def check_transport_failures(cli):
         check(f"failure {fail_at} never leaks the request body", "filename=" not in err and "channel_id=" not in err)
 
 
+def check_thread_workspace_and_out(cli, root):
+    """work 與 out 底下的產物上傳得出去，而且上傳後留在原地。"""
+    key = "C0123456789-1710000000.123456"
+    repo = cli.WORK_ROOT / key / "repos" / "app"
+    (repo / "prototype").mkdir(parents=True)
+    shots = cli.OUT_ROOT / key
+    shots.mkdir(parents=True)
+    cases = (
+        ("HTML prototype from work", repo / "prototype" / "checkout.html", b"<!doctype html><p>hi</p>", "text/html"),
+        ("diff .md from work", repo / "change.md", b"```diff\n+x\n```\n", "text/markdown"),
+        ("screenshot from out", shots / "variant-a.png", PNG_BYTES, "image/png"),
+    )
+    for label, path, data, mime in cases:
+        path.write_bytes(data)
+        fake = Slack(); cli.urlopen = fake
+        code, out, err = run(cli, ["--file", str(path), "--channel", CHANNEL, "--thread-ts", THREAD_TS])
+        check(f"{label} uploads", code == 0, err)
+        check(f"{label} makes the three requests", len(fake.requests) == 3, str(len(fake.requests)))
+        if len(fake.requests) == 3:
+            check(f"{label} uploads the bytes", fake.requests[1].data == data)
+            check(f"{label} uses its mime", headers_of(fake.requests[1]).get("content-type") == mime)
+            complete = form_body(fake.requests[2])
+            check(f"{label} lands in the thread", complete.get("channel_id") == CHANNEL and complete.get("thread_ts") == THREAD_TS)
+        check(f"{label} is left in place after upload", path.exists())
+        check(f"{label} reports no delete problem", not err.strip(), err)
+
+    # 失敗也一樣留著（out 由 runner 清、work 由 thread-workspace cleanup 清）。
+    failing = shots / "variant-b.png"; failing.write_bytes(PNG_BYTES)
+    fake = Slack(fail_at=2); cli.urlopen = fake
+    code, _, _ = run(cli, ["--file", str(failing), "--channel", CHANNEL, "--thread-ts", THREAD_TS])
+    check("out upload failure exits runtime", code == cli.EXIT_RUNTIME)
+    check("out upload failure keeps the file", failing.exists())
+
+    # work 底下指出去的 symlink 不跟。
+    outside = root / "secret.md"; outside.write_text("# secret")
+    link = repo / "leak.md"; link.symlink_to(outside)
+    fake = Slack(); cli.urlopen = fake
+    code, _, _ = run(cli, ["--file", str(link), "--channel", CHANNEL, "--thread-ts", THREAD_TS])
+    check("symlink in work is refused", code == cli.EXIT_INVALID_INPUT, str(code))
+    check("symlink in work never reaches the network", not fake.requests)
+
+    # 名字以 root 開頭但不是 root 底下（`work-evil`）不算。
+    sibling = Path(str(cli.WORK_ROOT) + "-evil"); sibling.mkdir()
+    (sibling / "x.md").write_text("# x")
+    fake = Slack(); cli.urlopen = fake
+    code, _, _ = run(cli, ["--file", str(sibling / "x.md"), "--channel", CHANNEL, "--thread-ts", THREAD_TS])
+    check("sibling of work is refused", code == cli.EXIT_INVALID_INPUT, str(code))
+    check("sibling of work never reaches the network", not fake.requests)
+
+
 def check_rejected_inputs(cli, root):
     outside = root / "outside.png"; outside.write_bytes(b"\x89PNG\r\n\x1a\n")
     (cli.DRAFTS_ROOT / "bad.txt").write_text("x")
@@ -251,12 +306,15 @@ def main():
     cli = load(); root = Path(tempfile.mkdtemp(prefix="slack-artifact-test-"))
     try:
         cli.DRAFTS_ROOT = root / "drafts"; cli.DRAFTS_ROOT.mkdir()
+        cli.WORK_ROOT = root / "work"; cli.WORK_ROOT.mkdir()
+        cli.OUT_ROOT = root / "out"; cli.OUT_ROOT.mkdir()
         os.environ["SLACK_BOT_TOKEN"] = TOKEN
         check_request_shapes(cli, root)
         check_encoding_guard(cli)
         check_non_ascii_filename(cli)
         check_rejection_errors(cli)
         check_transport_failures(cli)
+        check_thread_workspace_and_out(cli, root)
         check_rejected_inputs(cli, root)
     finally: shutil.rmtree(root, ignore_errors=True)
     if failures:

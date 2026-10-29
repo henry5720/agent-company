@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""把 drafts 內已存在的產物送回指定 Slack thread 的唯一入口。
+"""把已存在的產物（PNG、Markdown、HTML）送回指定 Slack thread 的唯一入口。
+
+來源只能在三個固定 root 底下（spec #21 §5、#24 決定 2、3），刪不刪由誰擁有那個目錄決定：
+
+- `/home/node/drafts`：`company-image` 的輸出。bot 擁有，上傳成功就刪；失敗留檔，
+  由 agent-config `slack-list cleanup` 24 小時清。
+- `/home/node/work`：thread workspace（HTML prototype、diff `.md`）。上傳後留著 ——
+  那是 agent 還在改的工作副本，由 `thread-workspace cleanup` 7 天清。
+- `/home/node/out`：sandbox 的截圖與轉換結果。對 bot 唯讀，一律留著，由 sandbox
+  runner 24 小時清。
 
 這是單一 container 的內部信任設計：channel 與 thread_ts 是 OpenAB 放進 prompt
 的 <sender_context> 後由 agent 明確帶入，不是 ACP side-channel，更不是不可竄改的
@@ -11,9 +20,9 @@
 Content-Type 與原始 bytes，不帶 token。
 
 路徑處理不用 resolve()：resolve 會跟著 symlink 走，檢查完的那個字串和之後真正
-開到的檔案可以是兩回事。這裡固定從 DRAFTS_ROOT 開一個 dirfd，再逐段
+開到的檔案可以是兩回事。這裡固定從 --file 落在的那個 root 開一個 dirfd，再逐段
 `O_DIRECTORY|O_NOFOLLOW` 往下走；讀取只從那個 fd，刪除只用同一個 parent fd 並
-先比對 inode。父目錄或檔案在檢查之後被換掉，結果是失敗，不是逃出 drafts。
+先比對 inode。父目錄或檔案在檢查之後被換掉，結果是失敗，不是逃出 root。
 """
 
 from __future__ import annotations
@@ -31,6 +40,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 DRAFTS_ROOT = Path("/home/node/drafts")
+WORK_ROOT = Path("/home/node/work")
+OUT_ROOT = Path("/home/node/out")
 SLACK_API = "https://slack.com/api"
 ALLOWED_TYPES = {".png": "image/png", ".md": "text/markdown", ".html": "text/html"}
 CHANNEL_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
@@ -68,35 +79,46 @@ def require_secure_flags() -> None:
     """沒有 O_NOFOLLOW／O_DIRECTORY 就沒有安全走法，直接拒絕而不是降級。"""
     if not O_NOFOLLOW or not O_DIRECTORY:
         raise RuntimeFailure(
-            "this platform has no O_NOFOLLOW/O_DIRECTORY; refusing to touch drafts"
+            "this platform has no O_NOFOLLOW/O_DIRECTORY; refusing to touch artifacts"
         )
 
 
-def draft_parts(raw: str) -> tuple[str, ...]:
-    """把 --file 拆成相對 DRAFTS_ROOT 的路徑片段。純字串運算，不碰檔案系統。
+def source_roots() -> tuple[tuple[Path, bool], ...]:
+    """(root, 上傳成功後要不要刪)。只有 bot 自己擁有、沒有別人清的 drafts 會刪。
+
+    每次呼叫才讀 module 變數，測試換掉 root 就生效。
+    """
+    return ((DRAFTS_ROOT, True), (WORK_ROOT, False), (OUT_ROOT, False))
+
+
+def draft_parts(raw: str) -> tuple[Path, tuple[str, ...], bool]:
+    """找出 --file 落在哪個 root，回傳 (root, 相對片段, 要不要刪)。純字串運算，不碰檔案系統。
 
     normpath 只做字面折疊，所以 `..` 走不出 root；真正的保證來自後面的 dirfd 走法。
     """
+    allowed = ", ".join(str(root) for root, _ in source_roots())
     if not raw.startswith("/"):
-        raise InputError(f"--file must be an absolute path under {DRAFTS_ROOT}")
+        raise InputError(f"--file must be an absolute path under one of: {allowed}")
     candidate = PurePosixPath(os.path.normpath(raw))
-    root = PurePosixPath(os.path.normpath(str(DRAFTS_ROOT)))
-    try:
-        relative = candidate.relative_to(root)
-    except ValueError:
-        raise InputError(f"--file must live under {DRAFTS_ROOT}") from None
-    parts = relative.parts
-    if not parts or any(part in ("", ".", "..") for part in parts):
-        raise InputError(f"--file must name a file under {DRAFTS_ROOT}")
-    return parts
+    for root, delete_after_upload in source_roots():
+        base = PurePosixPath(os.path.normpath(str(root)))
+        try:
+            relative = candidate.relative_to(base)
+        except ValueError:
+            continue
+        parts = relative.parts
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            raise InputError(f"--file must name a file under {root}")
+        return root, parts, delete_after_upload
+    raise InputError(f"--file must live under one of: {allowed}")
 
 
-def open_root() -> int:
+def open_root(root: Path) -> int:
     try:
-        return os.open(DRAFTS_ROOT, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        return os.open(root, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
     except OSError as exc:
         raise RuntimeFailure(
-            f"cannot open {DRAFTS_ROOT} as a real directory: {os.strerror(exc.errno)}"
+            f"cannot open {root} as a real directory: {os.strerror(exc.errno)}"
         ) from exc
 
 
@@ -139,14 +161,23 @@ def identity(info: os.stat_result) -> tuple:
 
 
 class Draft:
-    """一份已被 dirfd 鎖定的草稿：資料在記憶體，刪除只走同一個 parent fd。"""
+    """一份已被 dirfd 鎖定的產物：資料在記憶體，刪除只走同一個 parent fd。"""
 
-    def __init__(self, parent_fd: int, name: str, data: bytes, mime: str, info: os.stat_result):
+    def __init__(
+        self,
+        parent_fd: int,
+        name: str,
+        data: bytes,
+        mime: str,
+        info: os.stat_result,
+        delete_after_upload: bool,
+    ):
         self.parent_fd = parent_fd
         self.name = name
         self.data = data
         self.mime = mime
         self.info = info
+        self.delete_after_upload = delete_after_upload
 
     def unlink(self) -> None:
         """刪掉當初讀的那個檔案，不是現在剛好叫這個名字的東西。"""
@@ -169,9 +200,9 @@ class Draft:
 
 
 def open_draft(raw: str) -> Draft:
-    """從 DRAFTS_ROOT 逐段走到 --file，讀進記憶體，並把 parent fd 留著給刪除用。"""
+    """從 --file 所在的 root 逐段走到檔案，讀進記憶體，並把 parent fd 留著給刪除用。"""
     require_secure_flags()
-    parts = draft_parts(raw)
+    root, parts, delete_after_upload = draft_parts(raw)
     name = parts[-1]
     mime = ALLOWED_TYPES.get(PurePosixPath(name).suffix.lower())
     if mime is None:
@@ -181,7 +212,7 @@ def open_draft(raw: str) -> Draft:
     parent_fd: int | None = None
     fd: int | None = None
     try:
-        ancestors.append(open_root())
+        ancestors.append(open_root(root))
         for component in parts[:-1]:
             ancestors.append(open_dir_at(ancestors[-1], component))
         # 最後一段的 parent 要留著：上傳結束後只從它 unlink，不再走一次 path。
@@ -207,7 +238,7 @@ def open_draft(raw: str) -> Draft:
             os.close(fd)
         for extra in ancestors:
             os.close(extra)
-    return Draft(parent_fd, name, data, mime, info)
+    return Draft(parent_fd, name, data, mime, info, delete_after_upload)
 
 
 def validate_context(channel: str, thread_ts: str) -> tuple[str, str]:
@@ -270,7 +301,11 @@ def upload(upload_url: str, data: bytes, mime: str) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="slack-thread-artifact")
-    parser.add_argument("--file", required=True, help="drafts 內的絕對 PNG、Markdown 或 HTML 路徑")
+    parser.add_argument(
+        "--file",
+        required=True,
+        help="/home/node/drafts、/home/node/work 或 /home/node/out 內的絕對 PNG、Markdown 或 HTML 路徑",
+    )
     parser.add_argument("--channel", required=True, help="<sender_context> 的 channel_id")
     parser.add_argument("--thread-ts", required=True, help="<sender_context> 的 thread_ts")
     return parser.parse_args(argv)
@@ -314,17 +349,19 @@ def main(argv: list[str]) -> int:
         except (RuntimeFailure, OSError) as exc:
             print(f"slack-thread-artifact: {exc}", file=sys.stderr)
             return EXIT_RUNTIME
-        # 檔案已經送到對方手上，所以刪不掉不算交付失敗：說清楚並留給 24 小時
-        # cleanup，不要回非零讓 agent 以為要重傳。
-        try:
-            draft.unlink()
-        except DraftReplaced as exc:
-            print(f"slack-thread-artifact: {exc}", file=sys.stderr)
-        except OSError as exc:
-            print(
-                f"slack-thread-artifact: uploaded {draft.name} but could not delete it: {exc}",
-                file=sys.stderr,
-            )
+        # 只有 drafts 上傳成功就刪；work 與 out 由各自的 cleanup 收。檔案已經送到
+        # 對方手上，所以刪不掉不算交付失敗：說清楚並留給 24 小時 cleanup，不要回
+        # 非零讓 agent 以為要重傳。
+        if draft.delete_after_upload:
+            try:
+                draft.unlink()
+            except DraftReplaced as exc:
+                print(f"slack-thread-artifact: {exc}", file=sys.stderr)
+            except OSError as exc:
+                print(
+                    f"slack-thread-artifact: uploaded {draft.name} but could not delete it: {exc}",
+                    file=sys.stderr,
+                )
         print(f"uploaded {draft.name} to {channel}:{thread_ts}")
     return 0
 
