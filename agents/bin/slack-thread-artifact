@@ -32,7 +32,12 @@ from urllib.request import Request, urlopen
 
 DRAFTS_ROOT = Path("/home/node/drafts")
 SLACK_API = "https://slack.com/api"
-ALLOWED_TYPES = {".png": "image/png", ".md": "text/markdown", ".html": "text/html"}
+ALLOWED_TYPES = {
+    ".png": "image/png",
+    ".md": "text/markdown",
+    ".html": "text/html",
+    ".patch": "text/x-patch",
+}
 CHANNEL_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
 THREAD_TS_PATTERN = re.compile(r"^[0-9]{10,13}\.[0-9]{1,9}$")
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -175,7 +180,7 @@ def open_draft(raw: str) -> Draft:
     name = parts[-1]
     mime = ALLOWED_TYPES.get(PurePosixPath(name).suffix.lower())
     if mime is None:
-        raise InputError("--file must end in .png, .md, or .html")
+        raise InputError("--file must end in .png, .md, .html, or .patch")
 
     ancestors: list[int] = []
     parent_fd: int | None = None

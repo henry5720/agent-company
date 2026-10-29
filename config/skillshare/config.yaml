@@ -1,0 +1,11 @@
+# bot 裡的 skillshare 設定，以單檔唯讀 mount 到 ~/.config/skillshare/config.yaml。
+# source 是唯讀 snapshot 裡的 agent-config，跟維護者機器上的 ~/.config/skillshare 是同一個 repo；
+# target 跟維護者機器的 codex 一樣是 ~/.agents/skills。由 agent-sync 呼叫，不要在 bot 裡 pull/push。
+sources:
+  mcp: /home/node/snapshots/agent-config/mcp.yaml
+  skills: /home/node/snapshots/agent-config/skills
+
+targets:
+  codex:
+    skills:
+      path: ~/.agents/skills

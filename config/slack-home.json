@@ -13,7 +13,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*把 Slack 待辦、PM 留言和程式碼現況接起來的工作助理*\n用白話回答問題、整理待辦，也能把查到的東西做成檔案給你。"
+        "text": "*把 Slack 待辦、PM 留言和程式碼接起來的工作助理*\n用白話回答問題、整理待辦，也能動手改 code，把改好的 patch、截圖或檔案傳回這個對話串。"
       }
     },
     {
@@ -21,11 +21,11 @@
       "fields": [
         {
           "type": "mrkdwn",
-          "text": "*能讀什麼*\n• 訊息、圖片、截圖\n• PDF、Word、Excel、PowerPoint\n• 程式碼（唯讀，不會被我改到）\n• Bug/需求總表的待辦與留言"
+          "text": "*能讀什麼*\n• 訊息、圖片、截圖\n• PDF、Word、Excel、PowerPoint\n• 程式碼（最近同步的版本，也能看還沒合併的 branch）\n• Bug/需求總表的待辦與留言"
         },
         {
           "type": "mrkdwn",
-          "text": "*能給什麼*\n• Slack 訊息回覆\n• PNG 圖\n• HTML prototype（要開口要，不然給 PNG）"
+          "text": "*能給什麼*\n• Slack 訊息回覆\n• PNG 圖、截圖\n• 程式修改的 patch 檔（要人套用後才會生效）\n• HTML prototype（要開口要，不然給 PNG）"
         }
       ]
     },
@@ -34,7 +34,7 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "不需要特殊 prefix，也不用指定誰來處理，直接說你要什麼就好 —— 我會依任務自行決定要不要找更擅長寫 code 的助手接手，這不保證每次都會發生。"
+          "text": "不需要特殊 prefix，直接說你要什麼就好。"
         }
       ]
     },
@@ -59,7 +59,14 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*可查閱的專案*\n以下是最近一次同步的唯讀 snapshot，不一定等於 GitHub 最新狀態。\n• `agent-config` — 共用 agent skills 與 MCP 設定\n• `work-docs` — 專案與 API 等產品文件\n• `teamsync-frontend` — TeamSync React 網頁前端\n• `teamsync-backend` — TeamSync 多租戶協作與 AI 平台的 FastAPI 後端\n• `E-commerce-backend` — FastAPI 後端範本（OAuth2/JWT、Docker、MySQL）；沒有已確認的電商產品用途\n• `spc-backend` — FastAPI 後端範本（MySQL、Redis、MinIO、JWT）；沒有已確認的 SPC 產品用途\n• `teamsync-tutorials` — 給客戶看的 TeamSync 操作教學\n• `teamsync-app` — TeamSync Expo iOS／Android 聊天 app，也支援 Web"
+        "text": "*3. 動手改 code*\n我會把 repo 複製一份到自己的工作區改、裝套件、跑測試，改好後把 patch 檔傳回這個對話串。我沒有 GitHub 權限，推不上去，要有人在自己的電腦套用 patch 再 push。跑起來的畫面只有我看得到，我會截圖給你。\n• `把登入頁的錯誤訊息改成中文，給我 patch`\n• `跑一下 teamsync-frontend 的測試，看哪些沒過`"
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*可查閱的專案*\n以下是最近一次同步的版本，不一定等於 GitHub 最新狀態。\n• `agent-config` — 共用 agent skills 與 MCP 設定\n• `work-docs` — 專案與 API 等產品文件\n• `teamsync-frontend` — TeamSync React 網頁前端\n• `teamsync-backend` — TeamSync 多租戶協作與 AI 平台的 FastAPI 後端\n• `E-commerce-backend` — FastAPI 後端範本（OAuth2/JWT、Docker、MySQL）；沒有已確認的電商產品用途\n• `spc-backend` — FastAPI 後端範本（MySQL、Redis、MinIO、JWT）；沒有已確認的 SPC 產品用途\n• `teamsync-tutorials` — 給客戶看的 TeamSync 操作教學\n• `teamsync-app` — TeamSync Expo iOS／Android 聊天 app，也支援 Web"
       }
     },
     {
@@ -84,7 +91,7 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "我不會改 code、不會開 GitHub issue、不會改待辦狀態，也不會通知 PM 驗收 —— 那些要人來做。我看到的程式碼是最近一次同步的版本，不一定等於 GitHub 現在的樣子。\n附件單檔上限 50 MiB、連結 1 小時內有效，內容會送到 company gateway 處理。ZIP 只列得出檔名，影片不支援。"
+          "text": "我不會 push、不會開 PR 或 GitHub issue、不會改待辦狀態，也不會通知 PM 驗收 —— 那些要人來做。我看到的程式碼是最近一次同步的版本，不一定等於 GitHub 現在的樣子。\n附件單檔上限 50 MiB、連結 1 小時內有效，內容會送到 company gateway 處理。影片不支援；需要 OCR 的掃描檔讀不出來。"
         }
       ]
     },
@@ -96,7 +103,7 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "*組成*（想知道再看）：Slack 的訊息由 OpenAB 收下，每個對話串開一個 OpenCode，裡面裝的 omo-slim 把工作分給不同角色：主 agent 用 *Sol*，oracle 用 *Astra* 做深入分析，其他角色用 *Luna*；都透過公司 gateway 執行。模型由設定檔決定，沒辦法在 Slack 裡切換；主 agent 視任務需要，也可能委派給 Claude Code。"
+          "text": "*組成*（想知道再看）：Slack 的訊息由 OpenAB 收下，每個對話串開一個 Codex session，透過公司 gateway 用 *Sol* 模型執行。模型由設定檔決定，沒辦法在 Slack 裡切換。所有對話串共用同一個工作區。"
         }
       ]
     }

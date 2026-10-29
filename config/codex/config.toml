@@ -1,0 +1,16 @@
+# Codex 設定的範本。scripts/deploy.sh 把 base_url 的 placeholder 換成 env/openab.env 的
+# COMPANY_GATEWAY_BASE_URL，寫到 runtime/codex/config.toml，再以單檔唯讀疊在 CODEX_HOME 上，agent 改不掉 provider。
+# Codex 的 provider 設定不讀 env，所以 gateway 位址只能這樣填進去；key 照常走 env_key。
+model_provider = "company"
+model = "gpt-6.1-sol"
+# 只放 gpt-6.1-sol 一筆，消掉每輪回覆開頭的 model metadata warning。內容是該版 codex
+# `codex-rs/models-manager/models.json` 的 gpt-6-sol 那筆、只改 slug；升級 codex 時要重產，
+# parse 失敗 codex 整個起不來。
+model_catalog_json = "/etc/codex/catalog.json"
+
+[model_providers.company]
+name = "Company Gateway"
+# 公司 gateway 只提供 Responses API；Codex 打 `<base_url>/responses`，跟 company-image 共用同一個前綴。
+base_url = "${COMPANY_GATEWAY_BASE_URL}"
+wire_api = "responses"
+env_key = "COMPANY_GATEWAY_API_KEY"

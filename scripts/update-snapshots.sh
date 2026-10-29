@@ -2,11 +2,11 @@
 set -euo pipefail
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-ROOT=${SNAPSHOT_ROOT:-${HOME:?HOME must be set}/work-agent-snapshots}
+ROOT=${SNAPSHOT_ROOT:-${HOME:?HOME must be set}/agent-company-snapshots}
 INDEX_ROOT=$ROOT/.index
 CONFIG=${REPOS_CONFIG:-$REPO_DIR/config/repos.conf}
 SSH_KEY=${GITHUB_SSH_KEY:-${HOME:?HOME must be set}/.ssh/work-agent-github}
-STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/work-agent
+STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/agent-company
 LOCK=${SNAPSHOT_LOCK:-$STATE_DIR/snapshots.lock}
 LOG=${SNAPSHOT_LOG:-$STATE_DIR/snapshots.log}
 LOG_MAX_BYTES=${SNAPSHOT_LOG_MAX_BYTES:-1048576}
@@ -78,14 +78,28 @@ done < "$CONFIG"
 if [[ ${#indexed[@]} -gt 0 ]]; then
   script=""
   for name in "${indexed[@]}"; do
-    script+="if [ -s /home/node/code/.index/$name/codegraph.db ];"
-    script+=" then codegraph sync /home/node/code/$name;"
-    script+=" else codegraph init /home/node/code/$name; fi; "
+    script+="if [ -s /home/node/snapshots/.index/$name/codegraph.db ];"
+    script+=" then codegraph sync /home/node/snapshots/$name;"
+    script+=" else codegraph init /home/node/snapshots/$name; fi; "
   done
-  if SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" run --rm -T --no-deps \
-      --entrypoint sh backlog-agent -c "$script"; then
+  # Plain `docker run` with no network instead of `docker compose run`: indexing needs no
+  # network or home volume, only the bot's snapshot and .index mounts mirrored here.
+  image=$(SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" config --images agent)
+  if docker run --rm --network none --read-only --tmpfs /tmp \
+      --cap-drop ALL --security-opt no-new-privileges:true -e CODEGRAPH_TELEMETRY=0 \
+      -v "$ROOT:/home/node/snapshots:ro,z" -v "$INDEX_ROOT:/home/node/snapshots/.index:z" \
+      --entrypoint sh "$image" -c "$script"; then
     printf 'CodeGraph index updated for %d repos\n' "${#indexed[@]}"
   else
     printf 'CodeGraph index skipped (runtime image not built yet?)\n' >&2
+  fi
+fi
+
+# agent-config 可能剛更新：把 skills、MCP 與規則重新對齊進正在跑的 bot（跟啟動時的 pre_boot
+# 同一支）。bot 沒在跑就略過，下次啟動的 pre_boot 會做。
+if [[ -n $(SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" ps --status running -q agent 2>/dev/null) ]]; then
+  if ! SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" exec -T agent agent-sync; then
+    printf 'FAILED: agent-sync in the running bot; skills/MCP/rules may be stale\n' >&2
+    exit 1
   fi
 fi

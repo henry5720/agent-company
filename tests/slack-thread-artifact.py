@@ -230,6 +230,19 @@ def check_transport_failures(cli):
         check(f"failure {fail_at} never leaks the request body", "filename=" not in err and "channel_id=" not in err)
 
 
+def check_patch_upload(cli):
+    """agent 改完 code 交回 thread 的是 `git format-patch` 的 .patch，用 text/x-patch 上傳。"""
+    patch = cli.DRAFTS_ROOT / "0001-fix-typo.patch"
+    patch.write_text("From 0000000 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] fix typo\n")
+    fake = Slack(); cli.urlopen = fake
+    code, _, err = run(cli, ["--file", str(patch), "--channel", CHANNEL, "--thread-ts", THREAD_TS])
+    check(".patch upload exits 0", code == 0, err)
+    check(".patch upload deletes the draft", not patch.exists())
+    if len(fake.requests) == 3:
+        mime = headers_of(fake.requests[1]).get("content-type")
+        check(".patch is uploaded as text/x-patch", mime == "text/x-patch", repr(mime))
+
+
 def check_rejected_inputs(cli, root):
     outside = root / "outside.png"; outside.write_bytes(b"\x89PNG\r\n\x1a\n")
     (cli.DRAFTS_ROOT / "bad.txt").write_text("x")
@@ -257,6 +270,7 @@ def main():
         check_non_ascii_filename(cli)
         check_rejection_errors(cli)
         check_transport_failures(cli)
+        check_patch_upload(cli)
         check_rejected_inputs(cli, root)
     finally: shutil.rmtree(root, ignore_errors=True)
     if failures:

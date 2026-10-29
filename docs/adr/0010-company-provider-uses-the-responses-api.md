@@ -4,6 +4,9 @@
 
 Accepted（已決定）。Amends [0007](0007-single-container-opencode-runtime.md)、
 補 [0008](0008-restricted-company-image-cli.md) 沒寫到的另一半。
+Amended by [0012](0012-follow-the-official-openab-codex-deployment.md)（2026-10-29）：runtime 換成 Codex，
+`config/codex/config.toml` 用 `wire_api = "responses"`。「gateway 只提供 Responses API、前綴不是 `/v1`」仍成立；
+下面 OpenCode／`@ai-sdk/*` 與 `tests/provider-route.py` 的段落是歷史。
 
 ## Background
 

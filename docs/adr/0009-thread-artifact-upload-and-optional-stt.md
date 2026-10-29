@@ -32,7 +32,7 @@ artifact 的 mime 當 `Content-Type`、原始 bytes 當 body，而且不帶 bot 
 明確記下來，避免之後被讀成安全機制：
 
 OpenAB 不提供 ACP thread metadata side-channel。`sender_context` 是 **prompt content**，不是不可竄改的
-授權資料。整條路徑是「OpenAB 把 context 寫進 prompt → agent 照 `agents/CLAUDE.md` 的規則逐字帶入
+授權資料。整條路徑是「OpenAB 把 context 寫進 prompt → agent 照 `agents/AGENTS.md` 的規則逐字帶入
 → CLI 只驗格式」，三段都在同一個 container、共用同一個 `SLACK_BOT_TOKEN`。可被信任的理由是三段
 同屬一個信任域，不是任一段驗證了另一段。
 
@@ -64,7 +64,7 @@ company gateway 當成必定提供 STT 的服務。
 
 - 同 container 的 Slack token 同時可供 OpenAB、`slack-list` 和 uploader 使用，這是已接受的界線。
 - 上傳成功後草稿不可恢復；失敗時不刪，讓 cleanup 保留可觀察與人工處理的機會。
-- 「失敗保留 24 小時」需要有東西真的去刪：deployment host 的 `# work-agent-artifact-cleanup`
+- 「失敗保留 24 小時」需要有東西真的去刪：deployment host 的 `# agent-company-artifact-cleanup`
   crontab entry 每小時 :17 執行 `scripts/cleanup-artifacts.sh`，它在 container 內跑
   `slack-list cleanup`。刪除規則的正本在 work-helper，部署層只負責排程與記錄失敗。因為檢查
   每小時一次，實際壽命是 24 到 25 小時，不是剛好 24。

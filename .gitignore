@@ -2,3 +2,4 @@
 env/openab.env
 /runtime/
 *.local
+__pycache__/

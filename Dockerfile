@@ -2,12 +2,13 @@
 ARG OPENAB_IMAGE
 FROM ${OPENAB_IMAGE}
 
-ARG OPENCODE_VERSION
-ARG OMO_VERSION
+ARG CODEX_VERSION
+ARG CODEX_ACP_VERSION
 ARG CODEGRAPH_VERSION
-ARG CLAUDE_AGENT_ACP_VERSION
-ARG CLAUDE_CODE_VERSION
-ARG DOCLING_VERSION
+ARG SKILLSHARE_VERSION
+ARG PLAYWRIGHT_CLI_VERSION
+ARG SKILLSHARE_LINUX_AMD64_SHA256
+ARG SKILLSHARE_LINUX_ARM64_SHA256
 
 # Bind mounts carry host ownership, so the container user must share the host
 # user's uid/gid. Only /home/node and /usr/local/bin/openab are owned by the
@@ -16,94 +17,83 @@ ARG HOST_UID=1000
 ARG HOST_GID=1000
 
 USER root
-# git：-opencode base image（node:22-trixie-slim）沒有 git，但唯讀 snapshot 偵察
-# 全靠 `git show origin/<branch>:<path>` 這類指令。python3：slack-list 需要。
+# python3：slack-list、company-image、slack-thread-artifact 都只用 stdlib。
+# git、curl 上游已有，列出來是因為讀 snapshot 與 clone 副本都靠 git。
+# 上游 image 的 gh 照官方保留；container 裡沒有 GitHub credential，它什麼都推不出去。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl git libglib2.0-0 libgl1 libxcb1 python3 python3-pip \
+    && apt-get install -y --no-install-recommends curl git python3 \
     && rm -rf /var/lib/apt/lists/*
-RUN python3 -c 'import sys; assert (3, 10) <= sys.version_info[:2] < (3, 14), sys.version' \
-    && python3 -m pip install --no-cache-dir --break-system-packages "docling==${DOCLING_VERSION}" \
-    && python3 -c 'import docling; import docling.document_converter'
-ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
-RUN mkdir -p /opt/docling-models \
-    && docling-tools models download layout tableformer --output-dir /opt/docling-models \
-    && python3 -c 'from pathlib import Path; p=Path("/opt/docling-models"); assert p.is_dir() and any(p.iterdir()), "Docling model download produced no artifacts"' \
-    && chmod -R a+rX,a-w /opt/docling-models \
-    && chown -R root:root /opt/docling-models
-USER node
-RUN python3 -c 'from pathlib import Path; import os; p=Path("/opt/docling-models"); assert p.is_dir() and any(p.iterdir()); assert all(os.access(item, os.R_OK | (os.X_OK if item.is_dir() else 0)) for item in p.rglob("*")), "Docling artifacts are not readable by node"'
-USER root
 RUN npm i -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
-# OMO 的 Claude Code specialist 直接執行這個已固定版本的 binary，不用 npx
-# 在 runtime 下載未審核的套件。
-RUN npm i -g "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}"
-RUN npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
-ENV CLAUDE_AGENT_ACP_VERSION=${CLAUDE_AGENT_ACP_VERSION} \
-    CLAUDE_AGENT_ACP_BIN=/usr/local/bin/claude-agent-acp \
-    CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION} \
-    CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
+# playwright-cli 只 attach 到 chrome sidecar（127.0.0.1:9222），不下載瀏覽器、不裝系統依賴。
+RUN npm i -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}" \
+    && test "$(node -p 'require(process.argv[1]).version' "$(npm root -g)/@playwright/cli/package.json")" = "$PLAYWRIGHT_CLI_VERSION" \
+    && command -v playwright-cli
 
-# OpenCode 自包安裝在獨立 prefix，不依賴 OpenAB base image 內的版本。
-# /usr/local/bin/opencode 只保留指向這個 prefix 的 symlink；build 時同時驗證
-# symlink 的 resolved path 與 CLI 的 exact version，避免 base digest 或 package
-# drift 讓 runtime 靜默跑到另一版。OMO 是 OpenCode plugin，用同一份 pin 裝成
-# global package，讓 runtime 不必上網抓 plugin。Claude ACP specialist 直接使用
-# image 內固定版本的 adapter。
+# codex 與 codex-acp 一起裝在獨立 prefix，不用上游 global 裝的那兩個（版本跟 base digest 走）。
+# codex-acp 用 createRequire 解析自己底下的 @openai/codex，所以真正跑哪版 codex 由
+# config/openab.toml 的 CODEX_PATH 決定，指到這裡的 node_modules/.bin/codex。
+# build 時驗：PATH 上的 codex-acp／codex 都解析進這個 prefix、兩者 exact version 相符。
 RUN set -eu; \
-    OPENCODE_PREFIX="/opt/opencode-${OPENCODE_VERSION}"; \
-    npm install --prefix "/opt/opencode-${OPENCODE_VERSION}" "opencode-ai@${OPENCODE_VERSION}"; \
-    test -x "$OPENCODE_PREFIX/node_modules/.bin/opencode"; \
-    rm -f /usr/local/bin/opencode; \
-    ln -s "$OPENCODE_PREFIX/node_modules/.bin/opencode" /usr/local/bin/opencode; \
-    test "$(readlink /usr/local/bin/opencode)" = "$OPENCODE_PREFIX/node_modules/.bin/opencode"; \
-    resolved="$(readlink -f "$(command -v opencode)")"; \
-    test "$resolved" = "$(readlink -f "$OPENCODE_PREFIX/node_modules/.bin/opencode")"; \
-    case "$resolved" in \
-      "$OPENCODE_PREFIX"/node_modules/opencode-ai/*) ;; \
-      *) echo "opencode resolved outside $OPENCODE_PREFIX" >&2; exit 1 ;; \
+    CODEX_PREFIX="/opt/codex-${CODEX_VERSION}"; \
+    npm uninstall -g @agentclientprotocol/codex-acp @openai/codex; \
+    npm install --prefix "$CODEX_PREFIX" --fetch-retries=3 \
+      "@openai/codex@${CODEX_VERSION}" "@agentclientprotocol/codex-acp@${CODEX_ACP_VERSION}"; \
+    ln -sf "$CODEX_PREFIX/node_modules/.bin/codex-acp" /usr/local/bin/codex-acp; \
+    ln -sf "$CODEX_PREFIX/node_modules/.bin/codex" /usr/local/bin/codex; \
+    for bin in codex-acp codex; do \
+      resolved="$(readlink -f "$(command -v "$bin")")"; \
+      case "$resolved" in \
+        "$CODEX_PREFIX"/node_modules/*) ;; \
+        *) echo "$bin resolved outside $CODEX_PREFIX: $resolved" >&2; exit 1 ;; \
+      esac; \
+    done; \
+    test "$("$CODEX_PREFIX/node_modules/.bin/codex" --version)" = "codex-cli ${CODEX_VERSION}"; \
+    test "$(node -p 'require(process.argv[1]).version' "$CODEX_PREFIX/node_modules/@agentclientprotocol/codex-acp/package.json")" = "$CODEX_ACP_VERSION"; \
+    chmod -R a+rX,go-w "$CODEX_PREFIX"
+
+# skillshare：跟維護者機器同一個工具，把 agent-config 的 skills 與 MCP 裝進 Codex（agent-sync 呼叫）。
+# 從 GitHub release 下載固定版本，SHA-256 不符就中止。
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) arch=amd64; sum="$SKILLSHARE_LINUX_AMD64_SHA256" ;; \
+      arm64) arch=arm64; sum="$SKILLSHARE_LINUX_ARM64_SHA256" ;; \
+      *) echo "unsupported architecture" >&2; exit 1 ;; \
     esac; \
-    test "$(opencode --version)" = "$OPENCODE_VERSION"
-RUN npm i -g "oh-my-opencode-slim@${OMO_VERSION}"; \
-    OMO_DIR=/usr/local/lib/node_modules/oh-my-opencode-slim; \
-    test -f "$OMO_DIR/package.json"; \
-    test "$(node -p 'require(process.argv[1]).version' "$OMO_DIR/package.json")" = "$OMO_VERSION"; \
-    OMO_MAIN="$(node -p 'require(process.argv[1]).main || ""' "$OMO_DIR/package.json")"; \
-    test -n "$OMO_MAIN"; test -f "$OMO_DIR/$OMO_MAIN"; test -r "$OMO_DIR/$OMO_MAIN"; \
-    test "$(node -p 'require(process.argv[1]).main' "$OMO_DIR/package.json")" = "$OMO_MAIN"
-RUN test -x "$CLAUDE_AGENT_ACP_BIN" \
-    && test "$(command -v claude-agent-acp)" = "$CLAUDE_AGENT_ACP_BIN" \
-    && npm ls -g --depth=0 "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}" >/dev/null \
-    || { echo "the pinned Claude ACP adapter is missing or mismatched" >&2; exit 1; }
-RUN test -x /usr/local/bin/claude \
-    && claude --version | grep -qF "$CLAUDE_CODE_VERSION" \
-    || { echo "the pinned Claude Code CLI is missing or mismatched" >&2; exit 1; }
+    tarball="skillshare_${SKILLSHARE_VERSION}_linux_${arch}.tar.gz"; \
+    curl -fsSL -o "/tmp/$tarball" "https://github.com/runkids/skillshare/releases/download/v${SKILLSHARE_VERSION}/$tarball"; \
+    echo "$sum  /tmp/$tarball" | sha256sum -c -; \
+    tar -xzf "/tmp/$tarball" -C /usr/local/bin skillshare; \
+    rm "/tmp/$tarball"; \
+    chown root:root /usr/local/bin/skillshare; chmod 0755 /usr/local/bin/skillshare; \
+    skillshare --version | grep -qF "v${SKILLSHARE_VERSION}"
 
 # 生圖／改圖的唯一入口。它只用 Python 3 stdlib。
-# root 擁有、0755：agent 可以執行，不能改寫（rootfs 本來就是唯讀的，這是第二層）。
+# root 擁有、0755：agent 可以執行，不能改寫。
 COPY agents/bin/company-image /usr/local/bin/company-image
 COPY agents/bin/slack-thread-artifact /usr/local/bin/slack-thread-artifact
-COPY agents/bin/parse-document /usr/local/bin/parse-document
-RUN chmod 0755 /usr/local/bin/company-image \
+COPY agents/bin/agent-sync /usr/local/bin/agent-sync
+RUN chmod 0755 /usr/local/bin/company-image /usr/local/bin/agent-sync \
+    && chown root:root /usr/local/bin/agent-sync \
     && chown root:root /usr/local/bin/company-image \
     && chmod 0755 /usr/local/bin/slack-thread-artifact \
     && chown root:root /usr/local/bin/slack-thread-artifact \
-    && chmod 0755 /usr/local/bin/parse-document \
-    && chown root:root /usr/local/bin/parse-document \
     && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
 
-# OpenCode 有兩個必須可寫的目錄：OPENCODE_CONFIG_DIR（/home/node/.config/opencode）
-# 與它自己的 state root /home/node/.opencode，兩邊都會寫 `.gitignore` 與 state。
-# compose 各掛一個可寫的 named volume，設定正本只用單檔唯讀疊在 config dir 上。
-# 空的 named volume 會沿用 mount point 在 image 內的 ownership，目錄不存在就會變成
-# root:root，node 寫不進去 —— 所以先建好，讓下面的 chown -R 一起接手。
-# Claude Code 的 credential/state named volume 也會從這個 mount point 繼承
-# ownership；少建這個目錄時 fresh volume 會是 root:root，node 無法登入或寫 state。
-RUN mkdir -p /home/node/.claude /home/node/.config/opencode /home/node/.opencode
+# /home/node 是 named volume `home`。第一次掛上空 volume 時 Docker 會把 image 內的 /home/node
+# 連同 ownership 複製進去，所以唯讀 mount 的父目錄先建好，讓下面的 chown -R 接手；
+# 否則 Docker 會以 root:root 建出這些目錄，node 寫不進 CODEX_HOME。之後再改這裡的內容，
+# 已存在的 volume 不會跟著更新。
+RUN mkdir -p /home/node/.codex /home/node/.agents /home/node/snapshots /home/node/.local/bin \
+      /home/node/.config/skillshare \
+    && printf 'prefix=/home/node/.local\n' > /home/node/.npmrc
+# agent 不是 root，/usr/local 寫不進去；`npm i -g`（例如 pnpm）裝到 home，重啟後還在。
+ENV PATH=/home/node/.local/bin:$PATH
 
 RUN if [ "$HOST_GID" != "1000" ]; then groupmod -g "$HOST_GID" node; fi \
     && if [ "$HOST_UID" != "1000" ]; then usermod -u "$HOST_UID" -g "$HOST_GID" node; fi \
     && chown -R "$HOST_UID:$HOST_GID" /home/node /usr/local/bin/openab
 USER node
 RUN company-image --help >/dev/null \
+    && python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' /usr/local/bin/agent-sync \
     && slack-thread-artifact --help >/dev/null \
-    && parse-document --help >/dev/null
+    && ! command -v opencode && ! command -v claude

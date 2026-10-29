@@ -11,7 +11,7 @@
   `COMPANY_GATEWAY_API_KEY`）讀，不寫在原始碼、不接受參數覆蓋。
 - 輸出一律是 PNG，一律落在 `/home/node/drafts/<UTC 日期>/`。
 
-OpenCode 使用這一支：image 由同一份 Dockerfile 建置，並以 bash 執行它。
+Codex 以 shell 執行這一支：image 由同一份 Dockerfile 建置。
 
 請求走公司 gateway 的 Responses API `image_generation` tool：`generate` 只送
 prompt，`edit` 另外把來源圖片以 data URL 當成 `input_image` 一起送。
@@ -51,7 +51,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-# 這個值必須是 config/opencode/opencode.json 宣告過的模型；tests/static.sh 會比對。
+# 公司 gateway 上負責 image_generation 的模型，跟 Codex 對話用的模型（config/codex/）分開。
 MODEL = "gpt-5.6-terra"
 
 ALLOWED_SIZES = ("1024x1024", "1024x1536", "1536x1024")
