@@ -7,11 +7,13 @@
 - 只接受 prompt、允許清單內的 size，以及 `edit` 的來源圖片路徑。
 - 沒有 endpoint、header、model、輸出路徑這類參數 —— 呼叫者無法把請求導到
   別的地方，也無法把檔案寫到 drafts 以外。
-- gateway 位置與 key 只從 runtime env（`COMPANY_GATEWAY_BASE_URL`、
-  `COMPANY_GATEWAY_API_KEY`）讀，不寫在原始碼、不接受參數覆蓋。
+- 請求一律送到 host proxy，位置只從 runtime env `COMPANY_GATEWAY_BASE_URL` 讀
+  （production 是 bridge 上的 `http://10.231.0.1:18080`，正本 config/host-network.env），
+  不寫在原始碼、不接受參數覆蓋。
+- key 不在 container 裡：host Caddy proxy 補上 Authorization（config/caddy/Caddyfile），
+  所以這支不讀 key、不送 Authorization header。proxy 在 bridge 上走 plain http，
+  因此也不要求 https。
 - 輸出一律是 PNG，一律落在 `/home/node/drafts/<UTC 日期>/`。
-
-OpenCode 使用這一支：image 由同一份 Dockerfile 建置，並以 bash 執行它。
 
 請求走公司 gateway 的 Responses API `image_generation` tool：`generate` 只送
 prompt，`edit` 另外把來源圖片以 data URL 當成 `input_image` 一起送。
@@ -51,7 +53,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-# 這個值必須是 config/opencode/opencode.json 宣告過的模型；tests/static.sh 會比對。
+# 生圖用的模型，由 gateway 解讀；proxy 不看 body。
 MODEL = "gpt-5.6-terra"
 
 ALLOWED_SIZES = ("1024x1024", "1024x1536", "1536x1024")
@@ -85,7 +87,6 @@ DRAFTS_ROOT = Path("/home/node/drafts")
 SOURCE_ROOTS = (Path("/home/node/drafts"), Path("/home/node/.openab"), Path("/tmp"))
 
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 MAX_NAME_COLLISIONS = 99
 
@@ -112,18 +113,7 @@ def gateway_endpoint() -> str:
     parsed = urlparse(base)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise RuntimeFailure(f"COMPANY_GATEWAY_BASE_URL is not an http(s) URL: {base}")
-    if parsed.scheme == "http" and parsed.hostname not in LOCAL_HOSTS:
-        raise RuntimeFailure(
-            "COMPANY_GATEWAY_BASE_URL must be https unless it points at localhost"
-        )
     return base.rstrip("/") + "/responses"
-
-
-def gateway_key() -> str:
-    key = os.environ.get("COMPANY_GATEWAY_API_KEY", "").strip()
-    if not key or key == "replace-me":
-        raise RuntimeFailure("COMPANY_GATEWAY_API_KEY is not set in the runtime env")
-    return key
 
 
 def require_secure_flags() -> None:
@@ -373,15 +363,11 @@ def call_gateway(body: dict) -> bytes:
     連線關掉之後才做，所以兩條路徑共用同一組檢查。
     """
     endpoint = gateway_endpoint()
-    key = gateway_key()
     request = Request(
         endpoint,
         data=json.dumps(body).encode("utf-8"),
-        # 固定兩個 header，沒有 --header 這種東西。
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
+        # 固定一個 header，沒有 --header 這種東西；Authorization 由 host proxy 補。
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:

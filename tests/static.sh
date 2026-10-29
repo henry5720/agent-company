@@ -281,6 +281,11 @@ else
   limited 'docker compose config --quiet (Docker unavailable)'
 fi
 
+# spec #21 §3：key 只在 host proxy，company-image 不讀它也不自己送 Authorization header。
+if grep -nE 'COMPANY_GATEWAY_API_KEY|"Authorization"' "$ROOT/agents/bin/company-image"; then
+  echo 'company-image must not read the gateway key or send Authorization; the host proxy adds it' >&2
+  exit 1
+fi
 "$ROOT/tests/image-runtime.py"
 "$ROOT/tests/slack-thread-artifact.py"
 "$ROOT/tests/artifact-path-safety.py"
