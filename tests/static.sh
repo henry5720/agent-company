@@ -197,7 +197,11 @@ assert not bot.get('privileged')
 # Chrome sidecar: pinned by digest, shares the bot's localhost, holds no secrets.
 chrome = doc['services']['chrome']
 assert chrome['image'] == versions['CHROME_IMAGE'] and '@sha256:' in chrome['image']
-assert chrome['network_mode'] == 'service:agent', 'agent must reach Chrome at 127.0.0.1:9222'
+# Both join a network-only holder (k8s pause): joining agent's own network would strand Chrome
+# in a dead namespace whenever agent restarts.
+assert doc['services']['net']['image'] == versions['PAUSE_IMAGE'] and '@sha256:' in versions['PAUSE_IMAGE']
+assert bot['network_mode'] == 'service:net' and chrome['network_mode'] == 'service:net', \
+    'agent must reach Chrome at 127.0.0.1:9222 across restarts of either one'
 assert '--remote-debugging-address=127.0.0.1' in chrome['entrypoint'] and '--remote-debugging-port=9222' in chrome['entrypoint']
 assert not chrome.get('env_file') and not chrome.get('environment') and not chrome.get('volumes')
 mcp_args = (root / 'config/skillshare/config.yaml').read_text()
