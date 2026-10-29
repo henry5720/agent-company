@@ -6,12 +6,10 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$ROOT/scripts/lib.sh"
 load_env "$ROOT"
 
-SNAPSHOT_ROOT=${SNAPSHOT_ROOT:-$HOME/work-agent-snapshots}
+SNAPSHOT_ROOT=${SNAPSHOT_ROOT:-$HOME/agent-company-snapshots}
 HOST_UID=${HOST_UID:-1000}
 HOST_GID=${HOST_GID:-1000}
 ENV_FILE="$ROOT/env/openab.env"
-STATE_DIR="$ROOT/runtime/openab"
-DRAFT_DIR="$ROOT/runtime/drafts"
 R2_ALLOWED_HOST="99de68928da234ebcf0c9370443ad7ee.r2.cloudflarestorage.com"
 
 fail() {
@@ -22,7 +20,6 @@ fail() {
 [[ -f "$ENV_FILE" ]] || fail "missing $ENV_FILE (copy env/openab.env.example and fill secrets)"
 [[ $(stat -c '%a' "$ENV_FILE") =~ ^(600|640)$ ]] || fail "$ENV_FILE must have mode 600 or 640"
 
-# The gateway credentials are required by OpenCode and company-image.
 required_keys=(
   SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_LIST_ID SLACK_TEAM_ID SLACK_WORKSPACE_URL WORK_HELPER_ISSUE_MODE
   COMPANY_GATEWAY_BASE_URL COMPANY_GATEWAY_API_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
@@ -33,10 +30,9 @@ done
 grep -q '^WORK_HELPER_ISSUE_MODE=manual$' "$ENV_FILE" || fail "WORK_HELPER_ISSUE_MODE must be manual"
 grep -q '^SLACK_BOT_TOKEN=xoxb-' "$ENV_FILE" || fail "SLACK_BOT_TOKEN must start with xoxb-"
 grep -q '^SLACK_APP_TOKEN=xapp-' "$ENV_FILE" || fail "SLACK_APP_TOKEN must start with xapp-"
-# company-image refuses a plain-http gateway; catch it here instead of at the
-# first Slack request for an image.
-grep -q '^COMPANY_GATEWAY_BASE_URL=https://' "$ENV_FILE" ||
-  fail "COMPANY_GATEWAY_BASE_URL must be an https URL"
+# Codex and company-image both append /responses to this prefix (ADR 0010).
+grep -Eq '^COMPANY_GATEWAY_BASE_URL=https://[^[:space:]]+[^/]$' "$ENV_FILE" ||
+  fail "COMPANY_GATEWAY_BASE_URL must be an https URL without a trailing slash"
 ! grep -q 'replace-me' "$ENV_FILE" || fail "$ENV_FILE still contains placeholder values"
 
 # R2 credentials are required for both OpenAB configs. Do not probe R2 here:
@@ -52,8 +48,8 @@ for key in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
       ;;
   esac
 done
-grep -Fq "PARSE_DOCUMENT_ALLOWED_HOST: $R2_ALLOWED_HOST" "$ROOT/compose.yaml" ||
-  fail "compose.yaml must set PARSE_DOCUMENT_ALLOWED_HOST to $R2_ALLOWED_HOST"
+grep -Fq "endpoint = \"https://$R2_ALLOWED_HOST\"" "$ROOT/config/openab.toml" ||
+  fail "config/openab.toml [filestore].endpoint must be https://$R2_ALLOWED_HOST"
 
 # STT 是選配，且不是公司 gateway 的延伸假設。兩個值要嘛都沒有、要嘛都填；真正啟用
 # 前還必須把 OpenAB config 的 [stt].enabled 改成 true。
@@ -65,23 +61,27 @@ if [[ -n ${stt_base#STT_BASE_URL=} || -n ${stt_key#STT_API_KEY=} ]]; then
   [[ $stt_base == STT_BASE_URL=https://* ]] || fail "STT_BASE_URL must be an https URL"
 fi
 
-printf 'runtime: opencode\nconfig:  %s\n' "$ROOT/config/openab.toml"
-for f in opencode.json oh-my-opencode-slim.json; do
-  [[ -f "$ROOT/config/opencode/$f" ]] || fail "missing config/opencode/$f"
-  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$ROOT/config/opencode/$f" ||
-    fail "config/opencode/$f is not valid JSON"
-done
+printf 'runtime: codex-acp\nconfig:  %s\n' "$ROOT/config/openab.toml"
+# A config or catalog that does not parse stops codex from starting at all. The template
+# carries one ${COMPANY_GATEWAY_BASE_URL} placeholder that deploy.sh fills in.
+grep -qF '${COMPANY_GATEWAY_BASE_URL}' "$ROOT/config/codex/config.toml" ||
+  fail "config/codex/config.toml lost its \${COMPANY_GATEWAY_BASE_URL} placeholder"
+python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' "$ROOT/config/codex/config.toml" ||
+  fail "config/codex/config.toml is not valid TOML"
+python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["models"]' "$ROOT/config/codex/catalog.json" ||
+  fail "config/codex/catalog.json is not a valid model catalog"
 
 # The container runs as HOST_UID:HOST_GID (see Dockerfile), so the writable
-# bind mounts must belong to that identity.
-[[ $(stat -c '%u:%g' "$STATE_DIR") == "$HOST_UID:$HOST_GID" ]] || fail "$STATE_DIR must be owned by $HOST_UID:$HOST_GID"
-[[ $(stat -c '%u:%g' "$DRAFT_DIR") == "$HOST_UID:$HOST_GID" ]] || fail "$DRAFT_DIR must be owned by $HOST_UID:$HOST_GID"
+# bind mount below must belong to that identity.
 [[ $(id -u) == "$HOST_UID" ]] || fail "HOST_UID=$HOST_UID does not match the user running docker ($(id -u))"
 
-# The whole snapshot root is mounted at /home/node/code, so nothing but the configured
+# The whole snapshot root is mounted at /home/node/snapshots, so nothing but the configured
 # snapshots may live in it.
 [[ -d "$SNAPSHOT_ROOT" ]] || fail "snapshot root missing: $SNAPSHOT_ROOT (run scripts/install-sync-cron.sh)"
-[[ -d "$SNAPSHOT_ROOT/agent-config/skills" ]] || fail "missing $SNAPSHOT_ROOT/agent-config/skills (skills are mounted from there)"
+# agent-sync builds the bot's skills, MCP and rules from agent-config; pre_boot aborts without them.
+for path in skills mcp.yaml instructions/agents-md/AGENTS.md; do
+  [[ -e "$SNAPSHOT_ROOT/agent-config/$path" ]] || fail "missing $SNAPSHOT_ROOT/agent-config/$path (agent-sync reads it)"
+done
 # Docker would create a missing bind source as root and the container could not
 # write the index, so fail loudly instead.
 [[ -d "$SNAPSHOT_ROOT/.index" ]] || fail "missing $SNAPSHOT_ROOT/.index (run scripts/update-snapshots.sh)"

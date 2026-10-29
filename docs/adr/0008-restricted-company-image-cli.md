@@ -3,6 +3,8 @@
 ## Status
 
 Accepted（已決定）。Amends [0007](0007-single-container-opencode-runtime.md)。
+Amended by [0012](0012-follow-the-official-openab-codex-deployment.md)（2026-10-29）：runtime 換成 Codex，
+決定本身不變；下面提到 OpenCode 與 Claude specialist 的段落是歷史。
 
 ## Background
 

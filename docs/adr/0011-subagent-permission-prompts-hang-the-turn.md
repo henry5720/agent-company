@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted（已決定）。補 [0007](0007-single-container-opencode-runtime.md) 的
+Superseded（2026-10-29）：OpenCode 已退場，Superseded by [0012](0012-follow-the-official-openab-codex-deployment.md)。
+原本：Accepted（已決定）。補 [0007](0007-single-container-opencode-runtime.md) 的
 permission 設定。
 
 ## Background

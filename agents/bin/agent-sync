@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""把 Codex 的設定、規則、skills 與 MCP 對齊到最新的 agent-config snapshot。
+
+OpenAB 的 pre_boot hook 在每次啟動時跑一次；host 每小時同步完 snapshot 後再跑一次。
+做的事跟維護者機器上的 chezmoi + skillshare 一樣，只是來源換成唯讀 snapshot：
+
+1. provider：把 deploy 產生的 /etc/codex/config.toml 換進 ~/.codex/config.toml，
+   保留 skillshare 寫的 [mcp_servers.*]。整份覆蓋會讓 skillshare 判定條目被別人改過、拒絕同步。
+2. 規則：~/.codex/AGENTS.md = 維護者的個人規則（agent-config）+ bot 專屬規則（agents/AGENTS.md）。
+3. skills 與 MCP：`skillshare sync -g`、`skillshare sync mcp -g`。
+
+任何一步失敗就 exit 1；pre_boot 會因此擋下啟動，cron 會在 log 留下 FAILED。
+"""
+
+import os
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+HOME = Path.home()
+CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
+PROVIDER_CONFIG = Path("/etc/codex/config.toml")
+BOT_RULES = Path("/etc/codex/AGENTS.bot.md")
+PERSONAL_RULES = HOME / "snapshots/agent-config/instructions/agents-md/AGENTS.md"
+MCP_HEADER = "[mcp_servers"
+
+
+def write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.agent-sync")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def merge_provider(provider: str, current: str | None) -> str:
+    """provider 段換新、skillshare 的 MCP 段原樣保留。"""
+    if MCP_HEADER in provider:
+        raise ValueError(f"{PROVIDER_CONFIG} must not declare MCP servers; they come from agent-config")
+    merged = provider
+    if current is not None:
+        lines = current.splitlines(keepends=True)
+        start = next((i for i, line in enumerate(lines) if line.lstrip().startswith(MCP_HEADER)), None)
+        if start is not None:
+            merged = provider.rstrip("\n") + "\n\n" + "".join(lines[start:])
+    tomllib.loads(merged)
+    return merged
+
+
+def combine_rules(personal: str, bot: str) -> str:
+    """個人規則在前，bot 專屬規則在後：後者描述這個環境跟維護者機器不同的地方。"""
+    return personal.rstrip("\n") + "\n\n" + bot.rstrip("\n") + "\n"
+
+
+def main() -> int:
+    CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    config = CODEX_HOME / "config.toml"
+    current = config.read_text(encoding="utf-8") if config.exists() else None
+    write_atomic(config, merge_provider(PROVIDER_CONFIG.read_text(encoding="utf-8"), current))
+
+    rules = combine_rules(PERSONAL_RULES.read_text(encoding="utf-8"), BOT_RULES.read_text(encoding="utf-8"))
+    write_atomic(CODEX_HOME / "AGENTS.md", rules)
+
+    for args in (["skillshare", "sync", "-g"], ["skillshare", "sync", "mcp", "-g"]):
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode != 0:
+            sys.stderr.write(result.stdout + result.stderr)
+            print(f"FAILED: {' '.join(args)} exited {result.returncode}", file=sys.stderr)
+            return 1
+    print("agent-sync: provider, rules, skills and MCP are in sync with agent-config")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+        print(f"FAILED: agent-sync: {exc}", file=sys.stderr)
+        sys.exit(1)

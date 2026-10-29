@@ -11,26 +11,39 @@ allow_user_messages = "involved"
 assistant_mode = false
 streaming = false
 
-# OpenAB 使用 OpenCode 原生 ACP（`opencode acp`），模型與 OMO 設定在
-# config/opencode/。
+# OpenAB 直接跑 codex-acp。provider、model 與 catalog 在 config/codex/。
+# 三個 env 只能從這裡給：[agent].env 在 env_clear() 之後加入、會蓋過 inherit_env；
+# OpenAB 不呼叫 session/set_mode，所以初始 mode 只能用 INITIAL_AGENT_MODE。
+# - CODEX_HOME：在可寫的 home volume 裡。沒有它 session/load 失敗，OpenAB 會默默開新 session。
+# - CODEX_PATH：image 內釘版的 codex（config/versions.env 的 CODEX_VERSION）。
+# - agent-full-access：OpenAB 官方對 container 部署的建議（docs/codex.md）。container 內 bwrap
+#   建不了 namespace，其他 mode 的 shell 不是失敗就是每條都要人按允許；邊界是 container 本身。
+# working_dir 照官方用 home；snapshot 在 /home/node/snapshots。
 [agent]
-command = "opencode"
-args = ["acp"]
-working_dir = "/home/node/code"
+command = "codex-acp"
+working_dir = "/home/node"
+env = { CODEX_HOME = "/home/node/.codex", CODEX_PATH = "/opt/codex-0.159.0/node_modules/.bin/codex", INITIAL_AGENT_MODE = "agent-full-access" }
 inherit_env = [
   "COMPANY_GATEWAY_API_KEY",
   "COMPANY_GATEWAY_BASE_URL",
-  "OPENCODE_CONFIG_DIR",
-  "CLAUDE_CODE_EXECUTABLE",
-  "CLAUDE_CONFIG_DIR",
-  "PARSE_DOCUMENT_ALLOWED_HOST",
-  "DOCLING_ARTIFACTS_PATH",
+  # agent-config mcp.yaml 的 context7 用 fromEnv 讀它；沒設時 context7 拿不到 key，其他 MCP 照常。
+  "CONTEXT7_API_KEY",
   "SLACK_BOT_TOKEN",
   "SLACK_LIST_ID",
   "SLACK_TEAM_ID",
   "SLACK_WORKSPACE_URL",
   "WORK_HELPER_ISSUE_MODE",
 ]
+
+# 每次啟動先把 provider、規則、skills 與 MCP 對齊 agent-config snapshot（agents/bin/agent-sync）。
+# 失敗就不啟動：少了 provider 設定 Codex 根本打不到 gateway。host 每小時同步完 snapshot 會再跑一次。
+[hooks.pre_boot]
+inline = '''
+#!/bin/sh
+exec /usr/local/bin/agent-sync
+'''
+timeout_seconds = 60
+on_failure = "abort"
 
 # 音檔只會在部署維護者確認另一個 OpenAI-compatible STT endpoint 後才啟用。公司
 # gateway 不因此被假定支援 STT；未啟用時 OpenAB 不轉錄，bot 必須明確回覆 audio 不支援。

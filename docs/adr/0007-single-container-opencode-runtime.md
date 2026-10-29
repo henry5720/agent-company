@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted（歷史決策）；部署 rollback 與 wrapper 強制入口已由簡化方案取代。
+Superseded（2026-10-29）。Superseded by [0012](0012-follow-the-official-openab-codex-deployment.md)。
+原本：Accepted（歷史決策）；部署 rollback 與 wrapper 強制入口已由簡化方案取代。
 
 ## Decision
 

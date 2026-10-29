@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted（已決定）。Supersedes [0005](0005-separate-backlog-and-execution-agents.md)。
+Superseded（2026-10-29）。Superseded by [0012](0012-follow-the-official-openab-codex-deployment.md)。
+原本：Accepted。Supersedes [0005](0005-separate-backlog-and-execution-agents.md)。
 Amended by [0007](0007-single-container-opencode-runtime.md)：image-artifact broker 不做，
 runtime secret 共用單一 container，版本改由 `config/versions.env` 集中固定。
 Amended（2026-09-26）：handoff／issue 草稿已移除，bot 只回答產品問題。
