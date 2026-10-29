@@ -158,7 +158,7 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
   - `/etc/codex/config.toml`（deploy 產生的 provider）、`/etc/codex/AGENTS.bot.md`（`agents/AGENTS.md`）、`~/.config/skillshare/config.yaml`：agent-sync 的輸入。
   - `/etc/codex/catalog.json` 與 `/etc/openab/config.toml`。
 - `~/.codex/config.toml`、`~/.codex/AGENTS.md`、`~/.agents/skills` 由 [`agents/bin/agent-sync`](../agents/bin/agent-sync) 在 OpenAB `pre_boot` 與每小時 snapshot 同步後產生，跟維護者機器的 chezmoi + skillshare 同一套：provider 換新、skillshare 寫的 MCP 條目保留（整份覆蓋會讓 skillshare 拒絕同步），規則是維護者個人規則接上 bot 專屬規則。這幾個檔在 home 裡、agent 改得到；agent 本來就拿得到 gateway key，這是 ADR 0012 接受的取捨。
-- `chrome` sidecar 跑固定 digest 的 headless Chrome，`network_mode: service:agent` 跟 agent 共用 localhost：agent 的 playwright-cli（`attach --cdp`）與 chrome-devtools MCP 都連 `127.0.0.1:9222`（跟維護者機器同一個 `--browser-url`），Chrome 開得到 agent 跑起來的 dev server。sidecar 沒有 token 與 volume，只聽 127.0.0.1。使用者連不到它；給人看的預覽網址之後另做。
+- `chrome` sidecar 跑固定 digest 的 headless Chrome，透過只持有網路的 `net`（k8s pause container）跟 agent 共用 localhost，任一邊重啟都不影響另一邊：agent 的 playwright-cli（`attach --cdp`）與 chrome-devtools MCP 都連 `127.0.0.1:9222`（跟維護者機器同一個 `--browser-url`），Chrome 開得到 agent 跑起來的 dev server。sidecar 沒有 token 與 volume，只聽 127.0.0.1。使用者連不到它；給人看的預覽網址之後另做。
 - `/home/node/snapshots/.index` 是唯一可寫的 snapshot 相關路徑。每個 snapshot 的 `.codegraph` 是指向 `.index/<repo>` 的相對 symlink；CodeGraph 索引是 WAL 模式的 SQLite，必須可寫。索引由 host 每小時用 runtime image 重建，agent 只能查詢。
 - Container 使用者的 uid/gid 由 `HOST_UID`／`HOST_GID` build arg 設定，必須等於執行 docker 的 host 使用者，可寫 bind mount 才成立。
 - Bind mount 帶 `:z`，SELinux enforcing 的 host 才讀得到；`z` 會 relabel 來源目錄，所以 snapshot root 是專用目錄。

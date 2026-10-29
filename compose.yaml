@@ -7,6 +7,18 @@ name: agent-company
 # home（官方用 PVC，這裡用 named volume）。跟官方不同的是唯讀的 snapshot，以及 `chrome`
 # sidecar（官方 docs/sidecar.md 的模式：跟 agent 共用 localhost）。
 services:
+  # 只持有網路的 container，等於 k8s pod 的 pause container。agent 與 chrome 都加入它的網路：
+  # 任一邊重啟都不會換掉對方的 localhost。直接讓 chrome 加入 agent 的網路的話，agent 一重啟
+  # chrome 就留在舊的 network namespace，127.0.0.1:9222 從此連不到。
+  net:
+    image: registry.k8s.io/pause:3.10@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+
   agent:
     build:
       context: .
@@ -24,6 +36,9 @@ services:
         HOST_GID: ${HOST_GID:-1000}
     image: agent-company:0.10.0-codex
     container_name: agent-company
+    network_mode: service:net
+    depends_on:
+      - net
     restart: unless-stopped
     env_file:
       - path: env/openab.env
@@ -60,15 +75,15 @@ services:
       # which keeps repo source read-only and adding a repo free of Compose edits.
       - ${SNAPSHOT_ROOT:?set SNAPSHOT_ROOT in .env}/.index:/home/node/snapshots/.index:z
 
-  # headless Chrome sidecar。network_mode 讓它跟 agent 共用 localhost：agent 連 127.0.0.1:9222
+  # headless Chrome sidecar。透過 `net` 跟 agent 共用 localhost：agent 連 127.0.0.1:9222
   # 就是它（跟維護者機器的 chrome-devtools MCP 同一個 --browser-url），它也開得到 agent 跑起來的
   # dev server。沒有 token、沒有 volume。entrypoint 直接跑 Chrome、只聽 127.0.0.1，不用 image
   # 自帶那個聽所有介面的 socat。
   chrome:
     image: chromedp/headless-shell:157.0.8103.27@sha256:7bee201478b2f6266aae01243740ee85c16281e32f42d3aed9fdf04f4eace7a1
-    network_mode: service:agent
+    network_mode: service:net
     depends_on:
-      - agent
+      - net
     restart: unless-stopped
     entrypoint:
       - /headless-shell/headless-shell

@@ -52,7 +52,7 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 
 - Repo snapshot 以單一 mount 掛成 `/home/node/snapshots`，唯讀；`/home/node/snapshots/.index`（CodeGraph 索引）可寫，由 host 維護。agent 改 code 一律 clone 到 home。
 - `~/.codex/config.toml` 由 `agent-sync` 管：只換 provider 段、保留 skillshare 寫的 `[mcp_servers.*]`。整份覆蓋會讓 skillshare 判定被別人改過而拒絕同步。不要把它改回唯讀 mount。
-- `chrome` sidecar（OpenAB `docs/sidecar.md` 的模式）跟 agent 共用 localhost，Chrome 聽 `127.0.0.1:9222`，讓 agent-config `mcp.yaml` 的 chrome-devtools 設定原樣可用。sidecar 不放 token、不掛 volume。
+- `chrome` sidecar（OpenAB `docs/sidecar.md` 的模式）跟 agent 共用 localhost，Chrome 聽 `127.0.0.1:9222`，讓 agent-config `mcp.yaml` 的 chrome-devtools 設定原樣可用。sidecar 不放 token、不掛 volume。兩者都加入只持有網路的 `net`（k8s pause container）；不要改成 `network_mode: service:agent`，那樣 agent 一重啟 Chrome 就斷線。
 - 生圖／改圖只走 `company-image`，參數維持 prompt、size、來源圖片。endpoint、header、model、輸出路徑留在 CLI 內；理由見 `docs/adr/0008-restricted-company-image-cli.md`。
 - `company-image` 與 `slack-thread-artifact` 的路徑處理固定從 root 開 dirfd、逐段 `O_DIRECTORY|O_NOFOLLOW`；刪除用同一個 parent fd 並比對檔案 identity；寫入用 `O_CREAT|O_EXCL|O_NOFOLLOW` 加 temp→fsync→rename。`tests/artifact-path-safety.py` 會擋 `resolve()` 或字串比對後再開檔的寫法。
 
