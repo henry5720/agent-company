@@ -448,7 +448,7 @@ docker network rm work-agent-net          # 只有沒有 container 接在上面�
 | `# work-agent-artifact-cleanup` | 每小時 :17 | bot 內 `slack-list cleanup`（drafts 24h）＋ 刪 `CODEX_HOME/sessions` 超過 7 天的 `rollout-*.jsonl`（`log/`、sqlite 不動）＋ 量 `CODEX_HOME` | `artifact-cleanup.log` |
 | `# work-agent-workspace-cleanup` | 每小時 :27 | bot 內 `thread-workspace cleanup`（7 天／20 GB，被刪的 thread 收到通知）＋ sandbox 內 `sandbox-runner cleanup-out`（out 24h） | `workspace-cleanup.log` |
 | `# work-agent-pnpm-prune` | 週日 04:37 | sandbox 內用各 snapshot repo 釘的 pnpm 版本跑 `pnpm store prune` | `pnpm-prune.log` |
-| `# work-agent-alerts` | 每小時 :47 | `scripts/alerts.py`：四類告警，發到維護者私人 channel | `alerts.log` |
+| `# work-agent-alerts` | 每小時 :47 | `scripts/alerts.py`：告警（類別見 `docs/system-design.md`「資源上限與用量告警」），發到維護者私人 channel | `alerts.log` |
 
 `install-sync-cron.sh` 一次裝全部 5 行：只裝同步、不裝清理的 host 會讓上傳失敗的檔、thread workspace
 與 rollout 無限長大。drafts 的保留期限是 24 小時，但檢查每小時才一次，所以實際壽命是 **24 到 25 小時**。
@@ -501,7 +501,7 @@ Slack、Cloudflare、公司 gateway 或 STT，不會跑真的 sandbox job，也�
 | 3 | 經 OpenAB 的真實往返 | 從 Slack 問一題（一般對話、streaming、一個 shell tool call）；同一 thread 再 @ 一次確認 `session/load` 續接；回覆開頭沒有 model metadata warning；Caddy log 有對應的 `/responses` | 離線只驗過最小 ACP client；OpenAB 本身沒跑過 |
 | 4 | 生圖經 proxy | 「驗證安全邊界」那三行 `company-image generate`（會計費一次），且出現在 Caddy log | 離線測試只驗 request shape |
 | 5 | 經 `/proc` 讀不讀得到 OpenAB 的 secret | 下面那行；照實記下讀不讀得到，寫回 `docs/system-design.md`「Runtime secret」 | 只是依 `/proc` 權限推論 |
-| 6 | thread workspace → sandbox 截圖 | 「Local 首次啟動」Slack 確認第 6 項；`docker inspect -f '{{.State.OOMKilled}}' work-agent-sandbox-1 work-agent-sandbox-2` 都是 `false`（5g 撐得過 install 與 dev server 預打包）；反覆改 Tailwind 幾次 vite 不 heap OOM | 要真的 repo、真的 install 與 Chromium |
+| 6 | thread workspace → sandbox 截圖 | 「Local 首次啟動」Slack 確認第 6 項；`docker inspect -f '{{.State.OOMKilled}}' work-agent-sandbox-1 work-agent-sandbox-2` 都是 `false`，且兩格 cgroup `memory.events` 的 `oom_kill` 沒增加（子 process 被 kill 時旗標不會變；路徑找法見 `scripts/alerts.py` 的 `read_oom_kills`）（5g 撐得過 install 與 dev server 預打包）；反覆改 Tailwind 幾次 vite 不 heap OOM | 要真的 repo、真的 install 與 Chromium |
 | 7 | 附件轉換 | 「Local 首次啟動」Slack 確認第 5 項：真的 PDF／DOCX／XLSX／PPTX 經 R2 URL → sandbox 轉 Markdown | 需要真實 OpenAB attachment 與 R2 URL |
 | 8 | Artifact 回原 thread | 「Local 首次啟動」Slack 確認第 6、7 項：drafts、work（HTML）、out（截圖）都上傳到真的 Slack；刻意失敗一次確認 drafts 留檔；檔案真的出現在 thread 而不是 `invalid_arguments` | 離線測試只比對 header 與 body 字串 |
 | 9 | 防火牆 | 「用拋棄式 container 驗」第 4、5 項（要先停正式 bot），或至少 `sudo work-agent-firewall check`；重開機後仍在；IMDS hop limit 1＋`http-tokens required` | 規則在 host kernel，不在 repo |

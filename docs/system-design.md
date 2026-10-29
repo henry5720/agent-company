@@ -324,12 +324,32 @@ host：8 核、31 GB RAM。上限正本 `compose.yaml`，`tests/static.sh` 會�
 私人 channel，訊息開頭 `[work-agent]`。webhook 是 agent-runner 那個 Slack app 另加的 work-agent 專用
 webhook，URL 只在 host 上的檔案；bot 不加入該 channel，bot 的 10 個 scope 不動。
 
-1. 任何 container 被 OOMKilled、RestartCount 增加，或不在跑。
-2. 根磁碟可用 < 20%、thread workspace 清完仍 > 20 GB、`CODEX_HOME` > 2 GB；大小超過 3 小時沒回報也告警（清理沒在跑）。
+1. 任何 container 被 OOMKilled、container 內任何 process 被 OOM kill，或 RestartCount 增加。
+2. 根磁碟可用 < 20%、thread workspace 清完仍 > 20 GB、`CODEX_HOME` > 2 GB。
 3. `/responses` 上一個完整小時的請求數 > 前 7 天「有請求的小時」中位數的 5 倍（log 不滿 7 天只記錄）。
 4. 生圖請求單日（UTC）> 50。
 
-③④ 是初值，上線兩週後用實際 log 調。門檻與細節正本在 `scripts/alerts.py` 檔頭。
+③④ 是初值，上線兩週後用實際 log 調。門檻與細節正本在 `scripts/alerts.py` 檔頭。各類的實際判法與限制：
+
+- **① 子 process 的 OOM**：`State.OOMKilled` 只反映 container 的主 process。sandbox 裡被 kill 的常是
+  runner 底下的子 process（#26 的 esbuild 預打包），container 照跑、旗標與 `FinishedAt` 都不變，
+  只看旗標會漏。所以另外讀每個 container 的 cgroup v2 `memory.events`（路徑由 `docker inspect`
+  的 `State.Pid` 經 `/proc/<pid>/cgroup` 找，不受 cgroup driver 影響），`oom_kill` 每增加一次發一次；
+  基準跟著 container lifetime（`Id`＋`StartedAt`），同一個 lifetime 裡第二次、第三次 OOM 都會發。
+- **sandbox 的 `GOMEMLIMIT=1GiB`**：`sandbox/Dockerfile` 設的 Go 執行期軟上限。前端每次起 dev server
+  都重新預打包，esbuild（Go）會長到 1.9 GB、加上 vite 1.7 GB，4g 格子實測被 OOM kill；設了之後同一流程
+  不再 OOM（#26）。它跟 5g 上限一起是 ① 不常響的前提；改掉任一個都要重測 install＋dev server。
+- **③ 中位數只算有請求的小時**：PM 只在上班時間用，168 小時多數是 0，照字面取中位數會是 0，任何一個
+  上班小時都會超過門檻。代價是半夜零星幾個請求的小時也算一個「活躍小時」，會把中位數拉低。
+- **③ 的基準含 codex 自己的額外請求**：codex 用 `gpt-5.6-luna` 另開的副 thread 也走 `/responses`，
+  一樣計入；codex 對 chatgpt.com 的連線（remote control、featured plugins，皆 401）不經 proxy、不在這份
+  log。兩者維護者決定接受、不關（#30，2026-10-29）。
+- **④ 只數 `company-image`**：生圖請求的判斷是 access log 裡 `User-Agent` 等於 `company-image` 送的
+  固定值（`agents/bin/company-image` 的 `USER_AGENT`，`tests/host-alerts.py` 比對）。有人在 bot 內直接
+  `curl` proxy 生圖不會被算進 ④，只會算進 ③ 的總量。
+- **spec 以外多出的三類**，都是「告警本身沒在運作」的訊號：container 不存在或沒在跑（含 `docker inspect`
+  讀不懂、讀不到 `memory.events`）；thread workspace／`CODEX_HOME` 大小超過 3 小時沒回報（清理排程沒在跑）；
+  讀不到 host proxy 的 access log（③④ 沒在跑）。
 
 ## 明確不做
 
