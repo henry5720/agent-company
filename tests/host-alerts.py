@@ -115,22 +115,40 @@ class Env:
         self.inspect = tmp / "inspect.json"
         self.hook_file = tmp / "alert-webhook"
         self.hook_file.write_text(webhook.url + "\n"); self.hook_file.chmod(0o600)
+        # cgroup v2 fixture：/proc/<pid>/cgroup 指到 <cgroup root>/system.slice/docker-<id>.scope，
+        # 跟 deployment host（systemd cgroup driver）實際的形狀一樣。
+        self.proc = tmp / "proc"; self.cgroup = tmp / "cgroup"
+        cli.PROC_ROOT, cli.CGROUP_ROOT = self.proc, self.cgroup
         self.healthy()
         self.disk = Usage(100 * GIB, 50 * GIB, 50 * GIB)
         cli.disk_usage = lambda path: self.disk
 
     def healthy(self):
         containers = {}
-        for name in ("work-agent", "work-agent-sandbox-1", "work-agent-sandbox-2"):
+        for pid, name in enumerate(("work-agent", "work-agent-sandbox-1", "work-agent-sandbox-2"), start=4100):
             containers[name] = {"Id": f"id-{name}", "Name": f"/{name}", "RestartCount": 0,
-                                "State": {"Running": True, "OOMKilled": False, "FinishedAt": "0001-01-01T00:00:00Z"}}
+                                "State": {"Running": True, "OOMKilled": False, "Pid": pid,
+                                          "StartedAt": "2026-10-01T00:00:00Z", "FinishedAt": "0001-01-01T00:00:00Z"}}
         self.containers = containers
+        shutil.rmtree(self.proc, ignore_errors=True); shutil.rmtree(self.cgroup, ignore_errors=True)
+        for name in containers:
+            self.oom_kills(name, 0)
         self.write_inspect()
         self.size_report("thread-workspace-bytes", 5 * GIB)
         self.size_report("codex-home-bytes", GIB // 2)
 
     def write_inspect(self):
         self.inspect.write_text(json.dumps(self.containers))
+
+    def oom_kills(self, name, count):
+        """寫 container 的 cgroup memory.events（照真實檔案的欄位）與 /proc/<pid>/cgroup。"""
+        item = self.containers[name]
+        scope = f"/system.slice/docker-{item['Id']}.scope"
+        proc = self.proc / str(item["State"]["Pid"]); proc.mkdir(parents=True, exist_ok=True)
+        (proc / "cgroup").write_text(f"0::{scope}\n")
+        events = self.cgroup / scope.lstrip("/"); events.mkdir(parents=True, exist_ok=True)
+        (events / "memory.events").write_text(
+            f"low 0\nhigh 0\nmax {count * 3}\noom {count}\noom_kill {count}\noom_group_kill 0\nsock_throttled 0\n")
 
     def size_report(self, name, value, at=None):
         (self.state / name).write_text(f"{int(at if at is not None else NOW - 20 * 60)} {value}\n")
@@ -259,6 +277,46 @@ def check_containers(env: Env):
     reset(env)
 
 
+def check_child_oom(env: Env):
+    """§8 ①：runner 底下的子 process（例如 esbuild，#26）被 OOM kill 時 container 不會結束，
+    `State.OOMKilled`／FinishedAt 看不出來；要看 cgroup memory.events 的 oom_kill 有沒有增加。"""
+    env.write_log(steady_history(8))
+    code, texts = env.run()
+    check("zero oom_kill does not alert", not any("OOM" in t for t in texts), str(texts))
+    env.oom_kills("work-agent-sandbox-1", 1)
+    code, texts = env.run(now=NOW + HOUR)
+    joined = "\n".join(texts)
+    check("child OOM kill (oom_kill 0 → 1) alerts", "work-agent-sandbox-1" in joined and "oom_kill" in joined, joined)
+    code, texts = env.run(now=NOW + 2 * HOUR)
+    check("same oom_kill count is not re-alerted", not any("OOM" in t or "oom_kill" in t for t in texts), str(texts))
+    env.oom_kills("work-agent-sandbox-1", 3)
+    code, texts = env.run(now=NOW + 3 * HOUR)
+    joined = "\n".join(texts)
+    check("another OOM in the same container lifetime alerts again", "1 → 3" in joined, joined)
+
+    # 主 process 被 OOM kill 並留下 OOMKilled，同一輪 oom_kill 也增加：只發一條。
+    env.containers["work-agent-sandbox-1"]["State"].update({"OOMKilled": True, "FinishedAt": "2026-10-29T12:00:00Z"})
+    env.write_inspect()
+    env.oom_kills("work-agent-sandbox-1", 4)
+    code, texts = env.run(now=NOW + 4 * HOUR)
+    lines = [l for t in texts for l in t.splitlines() if "work-agent-sandbox-1" in l]
+    check("one OOM event in one run is one alert line", len(lines) == 1, str(lines))
+
+    # container 重新啟動（StartedAt 換了、cgroup 計數從 0 開始）：新的 1 次也要告警。
+    env.containers["work-agent-sandbox-1"]["State"].update({"OOMKilled": False, "StartedAt": "2026-10-29T15:00:00Z"})
+    env.write_inspect()
+    env.oom_kills("work-agent-sandbox-1", 1)
+    code, texts = env.run(now=NOW + 5 * HOUR)
+    joined = "\n".join(texts)
+    check("OOM after a restart is compared with the new lifetime's zero", "0 → 1" in joined, joined)
+
+    # 讀不到 memory.events：OOM 偵測沒在跑，本身就是告警。
+    (env.cgroup / "system.slice/docker-id-work-agent.scope/memory.events").unlink()
+    code, texts = env.run(now=NOW + 6 * HOUR)
+    check("unreadable memory.events alerts", any("memory.events" in t and "`work-agent`" in t for t in texts), str(texts))
+    reset(env)
+
+
 def check_sizes(env: Env):
     env.write_log(steady_history(8))
     env.disk = Usage(100 * GIB, 81 * GIB, 19 * GIB)
@@ -336,6 +394,7 @@ def main():
         check_responses_rate(env)
         check_image_count(env)
         check_containers(env)
+        check_child_oom(env)
         check_sizes(env)
         check_log_unreadable(env)
         check_delivery(env)

@@ -3,7 +3,10 @@
 
 四類告警，有任何一條就以一則訊息 POST 到 Slack Incoming Webhook（訊息開頭 `[work-agent]`）：
 
-1. container 被 OOMKilled、RestartCount 增加，或不在跑（`docker inspect`，不 exec 進去）。
+1. container 被 OOMKilled、container 內任何 process 被 OOM kill、RestartCount 增加，或不在跑
+   （`docker inspect` 加讀 host 上的 cgroup 檔，不 exec 進去）。`State.OOMKilled` 只反映主
+   process；runner 底下的子 process（例如 esbuild，#26）被 kill 時 container 照跑，所以另外看
+   cgroup v2 `memory.events` 的 `oom_kill` 計數，每增加一次發一次。
 2. 根磁碟可用 < 20%；thread workspace 清完仍 > 20 GB；CODEX_HOME > 2 GB。後兩者的大小由
    清理排程在 container 內量好寫到 state 檔（lib.sh `report_size`），這裡只讀；超過 3 小時
    沒更新本身就是告警（清理沒在跑）。
@@ -56,6 +59,11 @@ REPEAT_SECONDS = DAY
 WEBHOOK_TIMEOUT_SECONDS = 15
 
 disk_usage = shutil.disk_usage
+# container 的 cgroup 從 /proc/<State.Pid>/cgroup 的 `0::<path>` 找，跟 cgroup driver
+# （systemd 的 system.slice/docker-<id>.scope 或 cgroupfs 的 docker/<id>）與 CgroupParent 無關。
+# 兩個都是 world-readable，cron 使用者不用 root。測試換成 fixture 目錄。
+PROC_ROOT = Path("/proc")
+CGROUP_ROOT = Path("/sys/fs/cgroup")
 
 
 def gib(n: float) -> str:
@@ -77,12 +85,16 @@ class Checker:
             self.state["ongoing"][key] = self.now
             self.alerts.append(message)
 
-    def once(self, key: str, message: str) -> None:
-        """一次性的事件（某次 OOM、某天超量）：同一個 key 只發一次。"""
+    def once(self, key: str, message: str | None) -> None:
+        """一次性的事件（某次 OOM、某天超量）：同一個 key 只發一次。
+
+        時間記最後一次看到的時候：狀況一直掛著（例如 OOMKilled 旗標）就不會在 30 天後
+        過期重發。message 是 None 時只記成已發（同一件事已經用別的訊息發過）。
+        """
         seen = self.state.setdefault("events", {})
-        if key not in seen:
-            seen[key] = self.now
+        if key not in seen and message is not None:
             self.alerts.append(message)
+        seen[key] = self.now
 
     def finish(self) -> None:
         ongoing = self.state.get("ongoing", {})
@@ -102,6 +114,7 @@ def check_containers(c: Checker) -> None:
         c.ongoing("docker-inspect", f"`docker inspect` 回傳看不懂的內容（exit {proc.returncode}）：{proc.stderr.strip()[:200]}")
         return
     restarts = c.state.setdefault("restart_counts", {})
+    oom_counts = c.state.setdefault("oom_kill_counts", {})
     for name in CONTAINERS:
         item = found.get(name)
         if item is None:
@@ -110,14 +123,51 @@ def check_containers(c: Checker) -> None:
         st = item.get("State", {})
         if not st.get("Running"):
             c.ongoing(f"stopped:{name}", f"container `{name}` 沒在跑")
+        counted = check_oom_kills(c, name, item, oom_counts)
         if st.get("OOMKilled"):
-            c.once(f"oom:{item['Id']}:{st.get('FinishedAt')}",
-                   f"container `{name}` 被 OOMKilled（結束於 {st.get('FinishedAt')}）")
+            # 一個 container lifetime（Id＋StartedAt）裡旗標只會從 false 變 true 一次，之後的
+            # OOM 靠上面的 oom_kill 計數。同一輪計數已經發過，就不再為同一件事多發一條。
+            c.once(f"oom:{item['Id']}:{st.get('StartedAt')}:{st.get('FinishedAt')}",
+                   None if counted else f"container `{name}` 被 OOMKilled（結束於 {st.get('FinishedAt')}）")
         count = int(item.get("RestartCount", 0))
         prev = restarts.get(name)
         if prev and prev.get("id") == item["Id"] and count > prev.get("count", 0):
             c.alerts.append(f"container `{name}` RestartCount {prev['count']} → {count}")
         restarts[name] = {"id": item["Id"], "count": count}
+
+
+def read_oom_kills(pid: int) -> int:
+    """回傳 pid 所在 cgroup 的 memory.events `oom_kill`。讀不到或格式不對就 raise。"""
+    lines = (PROC_ROOT / str(pid) / "cgroup").read_text().splitlines()
+    path = next(line[3:] for line in lines if line.startswith("0::"))
+    events = (CGROUP_ROOT / path.lstrip("/") / "memory.events").read_text().split("\n")
+    return int(next(line.split()[1] for line in events if line.startswith("oom_kill ")))
+
+
+def check_oom_kills(c: Checker, name: str, item: dict, counts: dict) -> bool:
+    """oom_kill 比上一輪多就告警；回傳這一輪有沒有發。
+
+    基準跟著 container lifetime（Id＋StartedAt）：重新啟動的 container 是新的 cgroup、
+    計數從 0 開始，所以換了 lifetime 就拿 0 比。第一次看到的 container 也拿 0 比 ——
+    已經有的 kill 不知道是什麼時候，寧可多發一次。
+    """
+    st = item.get("State", {})
+    pid = st.get("Pid") or 0
+    if not st.get("Running") or pid <= 0:
+        return False
+    try:
+        count = read_oom_kills(pid)
+    except (OSError, ValueError, IndexError, StopIteration):
+        c.ongoing(f"memory-events:{name}", f"讀不到 container `{name}` 的 cgroup memory.events；子 process 的 OOM kill 偵測沒有在跑")
+        return False
+    lifetime = f"{item['Id']}:{st.get('StartedAt')}"
+    prev = counts.get(name)
+    base = prev["count"] if prev and prev.get("lifetime") == lifetime else 0
+    counts[name] = {"lifetime": lifetime, "count": count}
+    if count > base:
+        c.alerts.append(f"container `{name}` 內有 process 被 OOM kill（cgroup oom_kill {base} → {count}）")
+        return True
+    return False
 
 
 def check_sizes(c: Checker, state_dir: Path, disk_path: str) -> None:
