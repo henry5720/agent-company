@@ -2,6 +2,8 @@
 
 ## Status
 
+**Superseded by [0013](0013-codex-reaches-the-gateway-through-a-host-proxy.md)。** 下面描述的 OpenCode provider 設定與測試都已退場；「gateway 只開 Responses API」由 0013 重寫。
+
 Accepted（已決定）。Amends [0007](0007-single-container-opencode-runtime.md)、
 補 [0008](0008-restricted-company-image-cli.md) 沒寫到的另一半。
 

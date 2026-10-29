@@ -1,39 +1,54 @@
 # Work Agent Deployment
 
-這個 context 定義 product-context bot 與 Slack 互動資料的領域詞彙和關係。
+這個 context 定義 workspace agent 與 Slack 互動資料的領域詞彙和關係。
 
 ## Language
 
-**product-context bot**:
-在 Slack 回答產品問題的唯讀 bot。它讀取 product context 後回答；它不是 remote executor，
-也不修改 repo 或代替人執行工作。
-_Avoid_: backlog agent、execution agent、remote executor
+**workspace agent**:
+在 Slack 給 PM 共用的 agent。它拿 repo snapshot 當參考做 prototype、回答產品問題、讀寫待辦；
+產物回 Slack thread 當參考，不進 repo，也不 push。
+_Avoid_: product-context bot、remote executor
 
 **product context**:
-描述產品現況、決策、限制與相關來源的共享脈絡。product-context bot 以它作為回答的依據。
-_Avoid_: 個人工作筆記、可寫 checkout
+描述產品現況、決策、限制與相關來源的共享脈絡。workspace agent 以它作為回答的依據。
+_Avoid_: 個人工作筆記
 
 **repo snapshot**:
-供 product-context bot 查閱的唯讀 repo 視圖。它是 product context 的工程來源之一，不是
-開發中的 checkout；bot 與 repo snapshot 的關係只有讀取。
-_Avoid_: clone、worktree、可寫 snapshot
+host 定期從 GitHub 同步、所有 thread 共用的唯讀 repo 視圖，停在基準 branch。它是 product
+context 的工程來源之一，也是 thread workspace 的 clone 來源；agent 對它只有讀取。
+_Avoid_: 可寫 snapshot、在 snapshot 上 checkout
+
+**thread workspace**:
+一個 Slack thread 專屬、可寫的 repo 工作副本，以 `<channel_id>-<thread root ts>` 識別，一次一個
+repo，從建立當下的 repo snapshot 而來。要改 code 時才建，不自動跟 snapshot 同步，久未修改會被清掉。
+_Avoid_: worktree、session dir、sandbox
+
+**prototype sandbox**:
+執行 repo code（install、dev server、截圖、附件轉換）的另一個 container，不帶任何 token；它唯讀讀
+thread workspace，只寫自己的產物目錄。共 2 格。
+_Avoid_: 單講「sandbox」（會跟 Codex 的 sandbox mode 混在一起）
+
+**app prototype**:
+在 thread workspace 改真的 app、由 prototype sandbox 起 dev server 後截圖交付的 prototype。預設做這種。
+
+**HTML prototype**:
+單一檔案、不連外部資源的 HTML 頁面，直接上傳到 thread。現有 app 跑不出來、PM 要單獨檔案，或只演示
+邏輯與流程時才做。單說「prototype」指 app prototype 與 HTML prototype 兩者統稱。
 
 **Slack query scope**:
 Slack 查詢的來源範圍。預設是 current thread，也可以是綁定的 List，或使用者明確提供的
-permalink／channel 來源；product-context bot 不把其他對話自動視為查詢來源。
+permalink／channel 來源；workspace agent 不把其他對話自動視為查詢來源。
 _Avoid_: 全域搜尋、隱含跨 thread 查詢
 
 **native attachment**:
-Slack v1 只直接理解文字、圖片與音訊附件。PDF、Office、video 與 ZIP 不屬於這個 bot 的
-支援輸入。
+Slack 直接理解的輸入是文字、圖片與音訊附件。PDF、DOCX、XLSX、PPTX 由 prototype sandbox 下載並轉成
+Markdown 後才讀（真實 OpenAB／R2 附件未實測）；video、ZIP 不支援。
 _Avoid_: 未宣告的附件格式
 
 **image artifact**:
-product-context bot 透過 `company-image` 向公司 gateway 產生或編輯的圖片產物。格式一定是 PNG，
-一定先落在 `/home/node/drafts/<UTC 日期>/`；只有使用者明確要求時，才改輸出 self-contained HTML
-prototype。artifact 上傳成功後立即刪除暫存；上傳失敗時保留給 host 每小時的 cleanup，壽命 24 到
-25 小時（保留期限 24 小時，但檢查每小時才一次）。
-_Avoid_: 未說明格式、永久保留暫存、bot 自己組 gateway 請求、宣稱剛好 24 小時
+`company-image` 產生或編輯的 PNG，一定先落在 `/home/node/drafts/<UTC 日期>/`。上傳成功後立即刪除；
+上傳失敗時保留給 host 每小時的 cleanup，壽命 24 到 25 小時（保留期限 24 小時，但檢查每小時才一次）。
+_Avoid_: 把截圖或 HTML prototype 也叫 image artifact、永久保留暫存、宣稱剛好 24 小時
 
 **sender context**:
 OpenAB 寫進 prompt 的當次 sender、`channel_id` 與 `thread_ts`。它是 prompt content，不是 ACP
@@ -42,45 +57,25 @@ side-channel，也不是不可竄改的授權資料。「產物回原本那個 t
 _Avoid_: 說成身分驗證、token isolation、防 prompt injection、broker 或 relay
 
 **company-image**:
-container 內生圖／改圖的唯一入口。它是一支受限 CLI：mode 只有 `generate` 與 `edit`，參數只有
-prompt、允許清單內的 size 與來源圖片，沒有 endpoint、header、model 或輸出路徑。gateway 位置與
-key 只從 runtime env 讀。兩個 agent runtime 共用同一支。
+container 內生圖／改圖唯一有人維護的入口。它是一支受限 CLI：mode 只有 `generate` 與 `edit`，參數只有
+prompt、允許清單內的 size 與來源圖片，沒有 endpoint、header、model 或輸出路徑。請求經 host proxy 送到
+公司 gateway，key 不在 container 裡，所以它不是安全邊界，是固定、可測的正常路徑。
 _Avoid_: broker、upload helper、任意 gateway 呼叫
 
 **skill catalog**:
- public repo `agent-config`（由 skillshare 管理）的 skills／MCP 定義 catalog；其中 `skills/` 整個目錄以唯讀
- mount 進 container。部署層不裁 catalog，所以「skill 在 container 內讀得到」不等於 OpenCode 已 allow，
- 也不等於 runtime contract 允許 bot 使用。真正的 runtime authorization 以本 repo 的 OpenCode permission、
- OMO/runtime 設定與 `agents/CLAUDE.md` 為準；新增 bot 能力還要 review permission、contract 與 Slack Home，
- 不在這裡另造一份 skill 清單。
-_Avoid_: skill registry、registry allowlist、catalog 等於授權、permission 是 sandbox
+public repo `agent-config`（由 skillshare 管理）的 skills／MCP 定義 catalog；其中 `skills/` 整個目錄以唯讀
+mount 進 container。部署層不裁 catalog，Codex 也沒有 skill deny 設定，所以「skill 在 container 內讀得到」
+不等於 runtime contract 允許 bot 使用。真正的允許清單只有 `agents/CLAUDE.md`；新增 bot 能力要 review
+contract、mount 與 Slack Home，不在這裡另造一份 skill 清單。
+_Avoid_: skill registry、registry allowlist、catalog 等於授權
 
 **agent runtime**:
- container 內實際接 ACP 的 CLI。預設 OpenAB process 是 OpenCode（`opencode acp`）搭 OMO plugin；
-  不需要特殊 prefix；OMO Slim 另可依任務自行決定是否透過 `@claude-code` ACP wrapper 委派固定版本的 Claude Code ACP
-  specialist。這是 LLM routing，非 deterministic；Claude 是可選 specialist，不是 bot 的必要執行層，
-  不可用時必須明確回報，不得靜默改走 OpenCode。首次需要時執行一次 `claude auth login`；
-  OMO orchestrator 不直接啟動 ACP，wrapper 失敗時必須明確回報委派失敗，不得靜默 fallback。
-_Avoid_: Claude 作為預設執行層、runtime npx download
-
-**model roles**:
- 單一 OpenAB container 使用 OpenCode 搭配 OMO remote profile；Sol 負責 orchestrator/synthesis，
- Luna 負責 explorer、librarian、designer 與 fixer，Astra 負責 oracle；Claude Code 只作受控 specialist。
- OpenCode 主模型為 Sol、小模型為 Luna。精確 ID 與角色 mapping 以
- [`config/opencode/opencode.json`](config/opencode/opencode.json) 和
- [`config/opencode/oh-my-opencode-slim.json`](config/opencode/oh-my-opencode-slim.json) 為準。
- 是否委派由 OMO 依任務自行決定。這是 LLM
- routing，非 deterministic，不保證每個複雜工作都會交給 Claude Code。每輪 OMO 不設 hard cap，但記錄
- model、subagent 與 image calls 14 天並在異常時告警。這些角色服務 product-context bot，不改變 bot 的唯讀定位。
-_Avoid_: Claude 作為預設執行層、因方便而 delegate
+container 內實際接 ACP 的程式：OpenAB 直接啟動 `codex-acp`，以 agent-full-access mode 執行，經 host proxy
+打公司 gateway。可寫範圍由 Docker mount 決定，不由 runtime 的 permission 決定。
+_Avoid_: 把 runtime mode 當成安全邊界、runtime npx download
 
 **runtime secret**:
-container 內 agent process 拿得到的憑證，目前包含 Slack bot token 與公司 gateway key。它們
-共用同一個失效邊界：沒有 broker、也沒有 token 隔離層。唯讀邊界靠 Slack allowlist、唯讀
-snapshot mount 與 agent runtime 的 permission 設定維持，不靠 token 放在哪個 process。
+container 內 agent process 讀得到的憑證：Slack bot token 在 agent env；OpenAB 自己的 Slack app token、
+R2 key 與（啟用時的）STT key 在 OpenAB process env，同 uid 的 agent 推論讀得到。公司 gateway key 不是
+runtime secret：它只在 host proxy。這些 secret 共用同一個失效邊界，沒有 broker、也沒有 token 隔離層。
 _Avoid_: 已隔離、broker、upload helper
-
-**Slack scope security debt**:
-功能先上線不等於現有 Slack 實作已完成縮權。現有 Slack 過度 scope 是高優先 follow-up security
-debt，必須持續追蹤至完成縮權。
-_Avoid_: 已縮權、已完成安全邊界

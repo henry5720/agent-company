@@ -2,6 +2,8 @@
 
 ## Status
 
+**Superseded by [0012](0012-shared-workspace-agent-for-pms.md)。** runtime 已換成 `codex-acp`、gateway key 已移出 container（[0013](0013-codex-reaches-the-gateway-through-a-host-proxy.md)）。
+
 Accepted（歷史決策）；部署 rollback 與 wrapper 強制入口已由簡化方案取代。
 
 ## Decision

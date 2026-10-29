@@ -264,7 +264,7 @@ assert 'allowed_users' not in script, 'Home publishing must not read nonexistent
 PY
 ! grep -R -n -E 'scripts/compose\.sh|openab\.claude-acp|OPENAB_AGENT_RUNTIME|OPENAB_IMAGE_(OPENCODE|CLAUDE)' \
   "$ROOT/scripts" "$ROOT/compose.yaml" "$ROOT/config" "$ROOT/README.md" "$ROOT/CLAUDE.md" "$ROOT/docs"
-# 退場的 runtime 不得殘留在 bot 的機器設定裡。文件與 Slack Home 文案由 #34 一起改。
+# 退場的 runtime 不得殘留在 bot 的機器設定裡（Slack Home 是文案，由下一段掃）。
 # 註解與 deploy.sh 裡斷言「不存在」的那幾行（`! command -v ...`）不算殘留。
 # 注意：`! grep` 在 set -e 底下不會讓 script 失敗，所以這裡用 if。
 if grep -R -n -i -E 'opencode|oh-my-opencode|claude-agent-acp|parse-document|docling' \
@@ -272,6 +272,16 @@ if grep -R -n -i -E 'opencode|oh-my-opencode|claude-agent-acp|parse-document|doc
   "$ROOT/scripts" "$ROOT/compose.yaml" "$ROOT/Dockerfile" "$ROOT/config" "$ROOT/env/openab.env.example" |
   grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#|! command -v'; then
   echo 'retired runtime (OpenCode/OMO/Claude ACP/parse-document/Docling) still referenced' >&2
+  exit 1
+fi
+# 文件與 Slack Home 也不得把退場的 runtime 寫成現役（#34）。ADR 是歷史敘述，不掃。
+# runbook 的切換與回滾要點名舊 image tag 與舊 volume，只放行那兩個識別字。
+if grep -R -n -i -E 'opencode|oh-my-opencode|claude-agent-acp|parse-document|docling' \
+  --exclude-dir=adr \
+  "$ROOT/README.md" "$ROOT/CLAUDE.md" "$ROOT/CONTEXT.md" "$ROOT/agents/CLAUDE.md" "$ROOT/docs" \
+  "$ROOT/config/slack-home.json" |
+  grep -v -E 'work-agent-openab:0\.10\.0-opencode|work-agent_opencode-'; then
+  echo 'docs or Slack Home still describe a retired runtime (OpenCode/OMO/Claude ACP/parse-document/Docling)' >&2
   exit 1
 fi
 

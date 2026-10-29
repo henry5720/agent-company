@@ -2,6 +2,8 @@
 
 ## Status
 
+**Superseded by [0012](0012-shared-workspace-agent-for-pms.md)。** 保留原文說明當初為什麼唯讀。
+
 Accepted（已決定）。Supersedes [0005](0005-separate-backlog-and-execution-agents.md)。
 Amended by [0007](0007-single-container-opencode-runtime.md)：image-artifact broker 不做，
 runtime secret 共用單一 container，版本改由 `config/versions.env` 集中固定。

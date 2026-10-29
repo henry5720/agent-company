@@ -2,6 +2,8 @@
 
 ## Status
 
+**Superseded by [0013](0013-codex-reaches-the-gateway-through-a-host-proxy.md)。** OpenCode permission 已退場；「沒人按允許，那一輪就停住」改由 `INITIAL_AGENT_MODE=agent-full-access` 處理。
+
 Accepted（已決定）。補 [0007](0007-single-container-opencode-runtime.md) 的
 permission 設定。
 

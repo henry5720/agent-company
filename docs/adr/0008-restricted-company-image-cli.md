@@ -4,6 +4,11 @@
 
 Accepted（已決定）。Amends [0007](0007-single-container-opencode-runtime.md)。
 
+Amended（spec #21，[0013](0013-codex-reaches-the-gateway-through-a-host-proxy.md)）：key 改放在 host proxy，
+不在 container 裡。CLI 不讀 key、不送 `Authorization`，也不再要求 https（proxy 在 bridge 上走 plain
+http）。收窄的介面因此**不再是安全邊界**，留著是為了好用：agent 有一個固定、可測的入口，
+不必每次自己組請求。介面、輸出位置與「不加 endpoint／model 參數」的維護規則不變。
+
 ## Background
 
 [0006](0006-readonly-product-context-handoff-bot.md) 原本用一個 image-artifact broker 提供生圖，
@@ -36,8 +41,8 @@ env 裡。那等於把 endpoint、header、model、輸出路徑全部交給模�
   - `--source` 必須是絕對路徑，resolve 之後必須落在 `/home/node/drafts`、`/home/node/.openab`
     或 `/tmp`，而且開頭必須是 PNG 或 JPEG magic。唯讀 snapshot 不在允許清單裡。
   - 沒有 endpoint、header、model、輸出路徑、重試次數這些參數。
-- gateway 位置與 key 只從 runtime env（`COMPANY_GATEWAY_BASE_URL`、`COMPANY_GATEWAY_API_KEY`）
-  讀。原始碼裡沒有 URL，也沒有 key；`tests/static.sh` 會掃。
+- gateway 位置只從 runtime env `COMPANY_GATEWAY_BASE_URL` 讀（production 是 host proxy
+  `http://10.231.0.1:18080`）。原始碼裡沒有 URL，也不讀 key、不送 `Authorization`；`tests/static.sh` 會掃。
 - 請求固定是公司 gateway 的 Responses API `image_generation` tool：`generate` 只送
   `input_text`，`edit` 另外附一張 `input_image` data URL，`tool_choice` 固定指到該 tool，
   `output_format` 固定 `png`。回應只認 `image_generation_call` 的 base64 結果，而且要通過 PNG
@@ -50,9 +55,8 @@ env 裡。那等於把 endpoint、header、model、輸出路徑全部交給模�
 - 輸出一律寫到 `/home/node/drafts/<UTC 日期>/<name>.png`，檔名衝突時加序號，不覆蓋。
 - 選 CLI 不選 MCP server：MCP 要在單一 runtime 各設定一次、各自維護一份 server 定義，而這裡需要
   的東西就是一個帶四個參數的呼叫。CLI 由 image 提供，單一 runtime 不必各自設定就都拿得到。
-- 單一 runtime 共用它：`config/openab.toml` 把
-  `COMPANY_GATEWAY_*` 放進 `inherit_env`，`config/opencode/opencode.json` 與
-  `managed-claude-settings.json` 都明列允許執行它。
+- runtime 取得它：`config/openab.toml` 把 `COMPANY_GATEWAY_BASE_URL` 放進 `inherit_env`。
+  （原本另由 OpenCode 與 Claude specialist 的 permission 設定明列允許；那兩份設定已隨 0013 退場。）
 - 把 PNG 送回 Slack thread 不在這個 ADR 裡。CLI 只負責產出檔案並印出路徑。
 
 ## Consequences
@@ -66,9 +70,10 @@ env 裡。那等於把 endpoint、header、model、輸出路徑全部交給模�
   多一個 parser，好處是 gateway 之後改回非 stream 也不會再壞一次。
 - 代價是這支 CLI 的介面就是能力上限。要多一個尺寸或多一種 mode 都得改 repo 並重新 build image，
   不能在 Slack 當場繞過。這是刻意的。
-- key 仍然在同一個 container 裡，agent 仍然可以自己 `curl`。這支 CLI 不是沙箱，是把「正常路徑」
-  做成一個窄入口，並且讓 `agents/CLAUDE.md` 有一個明確的東西可以指。0007 記的取捨沒有改變。
-- gateway credential 現在單一 runtime 都需要，`scripts/preflight.sh` 因此不再只在 OpenCode
-  runtime 檢查它們。
+- agent 仍然可以自己 `curl` proxy（proxy 會幫任何來自 bot 的 `POST /responses` 補 key）。這支 CLI
+  不是沙箱，是把「正常路徑」做成一個窄入口，並且讓 `agents/CLAUDE.md` 有一個明確的東西可以指。
+  key 本身已不在 container（0013）；用量由 proxy access log 與 `scripts/alerts.py` 的生圖告警看，
+  CLI 固定送 `User-Agent: work-agent-company-image` 讓 log 分得出生圖。
+- `scripts/preflight.sh` 反過來擋 `env/openab.env` 裡出現 `COMPANY_GATEWAY_API_KEY`。
 - CLI 只寫檔、只印路徑。上傳回 Slack thread 是另一條還沒收斂的路徑，在它收斂之前，
   `agents/CLAUDE.md` 要求 bot 照實說「檔案產好了」而不是「已經傳給你了」。

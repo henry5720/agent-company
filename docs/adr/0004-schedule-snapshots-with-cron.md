@@ -1,5 +1,7 @@
 # Schedule snapshots with cron
 
+**Amended by [0014](0014-run-repo-code-in-the-prototype-sandbox.md)：** host 已換成有 sudo 的 Ubuntu，「沒有 sudo」的前提不再成立；cron 換回 systemd timer 不在那次範圍內，排程仍全部由 `scripts/lib.sh` 的 `render_crontab` 產生。
+
 Snapshot同步改用維護者的crontab，不用systemd timer。裝system unit要sudo，而deployment帳號沒有；`systemctl --user`要開lingering，那同樣需要提權。cron是這台host上唯一不需要任何特權、又能在重開機後繼續運作的排程器。
 
 一般而言systemd timer在systemd主機上是比較好的選擇——journald自動收log、`Persistent=true`能補跑錯過的排程、可以宣告service相依。這兩個好處在這個job上剛好都不重要：`scripts/update-snapshots.sh`用`flock`自己防重入，而且它是冪等的，錯過一次下一輪就補上。

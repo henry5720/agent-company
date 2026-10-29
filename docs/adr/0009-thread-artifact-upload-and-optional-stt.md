@@ -1,5 +1,14 @@
 # ADR 0009：受限 thread artifact uploader 與可選 STT
 
+## Amended（spec #21）
+
+上傳來源從只有 drafts 改成三個 root：`/home/node/drafts`（`company-image` 輸出）、
+`/home/node/work`（thread workspace 裡的 HTML prototype 與 diff `.md`）、`/home/node/out`
+（prototype sandbox 的截圖與附件轉換結果）。**上傳成功只刪 drafts**：work 由
+`thread-workspace cleanup` 7 天清，out 對 bot 唯讀、由 sandbox runner 24 小時清。下文的
+「drafts」在路徑安全一節讀成「各自的 root」：每個 root 都從自己的 dirfd 逐段
+`O_NOFOLLOW` 往下走。STT 部分不動。
+
 ## 決定
 
 保留單一 OpenAB container，不增加 broker 或 relay；在 runtime image 內加入
@@ -54,9 +63,7 @@ CLI 的檔案處理不用 `resolve()`：resolve 跟著 symlink 走，檢查過�
 先寫暫存檔再 fsync、rename。父目錄或檔案在檢查之後被換掉的結果是失敗，不是逃出 drafts。攻擊佈局
 由 `tests/artifact-path-safety.py` 重現。
 
-單一 agent runtime 允許同一支命令；Claude ACP 只作 OMO specialist。
-
-OpenAB 兩份 config 都放可選 `[stt]`：`STT_BASE_URL` / `STT_API_KEY` 供標準
+OpenAB config 放可選 `[stt]`：`STT_BASE_URL` / `STT_API_KEY` 供標準
 `/audio/transcriptions` 使用，預設 `enabled = false`。未確認相容 STT provider 前，audio 直接拒絕；不把
 company gateway 當成必定提供 STT 的服務。
 
@@ -66,7 +73,7 @@ company gateway 當成必定提供 STT 的服務。
 - 上傳成功後草稿不可恢復；失敗時不刪，讓 cleanup 保留可觀察與人工處理的機會。
 - 「失敗保留 24 小時」需要有東西真的去刪：deployment host 的 `# work-agent-artifact-cleanup`
   crontab entry 每小時 :17 執行 `scripts/cleanup-artifacts.sh`，它在 container 內跑
-  `slack-list cleanup`。刪除規則的正本在 work-helper，部署層只負責排程與記錄失敗。因為檢查
+  `slack-list cleanup`。刪除規則的正本在 agent-config，部署層只負責排程與記錄失敗。因為檢查
   每小時一次，實際壽命是 24 到 25 小時，不是剛好 24。
 - 上傳成功但草稿在讀取後被換掉時，CLI 不刪那個檔案、在 stderr 說明並仍 exit 0：交付確實發生了，
   回非零只會讓 agent 重傳。殘檔交給上面那個 cleanup。
