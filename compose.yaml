@@ -8,91 +8,71 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        OPENAB_IMAGE: ghcr.io/openabdev/openab:0.10.0-beta.3-opencode@sha256:44abe31bc0cdb462e1177930590ce52c597e454ea817cd744b5f360875009561
-        OPENCODE_VERSION: 1.18.13
-        OMO_VERSION: 2.2.15
+        OPENAB_IMAGE: ghcr.io/openabdev/openab:0.10.0-beta.3-codex@sha256:b1a47eaeddb99cffef4ce50f3791cee9830043ef3a573c598a559ac913dff7e8
+        CODEX_VERSION: 0.159.0
+        CODEX_ACP_VERSION: 2.0.0
         CODEGRAPH_VERSION: 1.5.0
-        CLAUDE_AGENT_ACP_VERSION: 0.70.0
-        CLAUDE_CODE_VERSION: 2.1.236
-        DOCLING_VERSION: 2.121.0
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1000}
-    image: work-agent-openab:0.10.0-opencode
+    # tag 跟舊的 :0.10.0-opencode 不同，切換時舊 image 不會被這次 build 蓋掉（spec #21 §12）。
+    image: work-agent-openab:0.10.0-codex
     container_name: work-agent
     restart: unless-stopped
     env_file:
       - path: env/openab.env
         required: false
     environment:
-      CLAUDE_CONFIG_DIR: /home/node/.claude
-      CLAUDE_AGENT_ACP_VERSION: 0.70.0
-      CLAUDE_AGENT_ACP_BIN: /usr/local/bin/claude-agent-acp
-      CLAUDE_CODE_VERSION: 2.1.236
-      CLAUDE_CODE_EXECUTABLE: /usr/local/bin/claude
-      OPENCODE_CONFIG_DIR: /home/node/.config/opencode
-      # OpenCode 1.18.13 writes XDG state under ~/.local/state by default; route
-      # it to the existing writable opencode-state volume instead of read-only home.
-      XDG_STATE_HOME: /home/node/.opencode
       CODEGRAPH_TELEMETRY: "0"
-      DOCLING_ARTIFACTS_PATH: /opt/docling-models
-      # parse-document only accepts attachment URLs from this R2 host. This
-      # is a host allowlist, not an R2 credential or an API validation.
-      PARSE_DOCUMENT_ALLOWED_HOST: 99de68928da234ebcf0c9370443ad7ee.r2.cloudflarestorage.com
+      # host Caddy proxy（config/host-network.env 的 WORK_AGENT_GATEWAY_IP:WORK_AGENT_PROXY_PORT）。
+      # 寫在這裡會蓋過 env_file；gateway key 只在 proxy，這個 container 沒有 COMPANY_GATEWAY_API_KEY。
+      COMPANY_GATEWAY_BASE_URL: http://10.231.0.1:18080
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cpus: 6.0
-    mem_limit: 8g
+    # spec #21 §8：bot 讓出資源給 2 格 prototype sandbox。
+    cpus: 4.0
+    mem_limit: 6g
     pids_limit: 1024
     stop_grace_period: 30s
     tmpfs:
       - /tmp:size=1g,mode=1777
+    # 防火牆只認 10.231.0.10 是 bot、只有它連得到 host proxy（config/host-network.env）。
+    networks:
+      work-agent-net:
+        ipv4_address: 10.231.0.10
     # `z` relabels bind mounts for SELinux hosts and is a no-op elsewhere.
     volumes:
       # OpenAB 唯一 runtime config。
       - ./config/openab.toml:/etc/openab/config.toml:ro,z
-      # agent 規則只有 agents/CLAUDE.md 一份。Claude Code 直接讀這個路徑；
-      # OpenCode 由 config/opencode/opencode.json 的 `instructions` 指過來。
-      - ./agents/CLAUDE.md:/home/node/CLAUDE.md:ro,z
-      # OPENCODE_CONFIG_DIR 整個唯讀會讓 `opencode acp` 一開機就死在
-      # `FileSystem.writeFile (.../.gitignore)`：OpenCode 自己要在 config dir 寫
-      # `.gitignore` 與 state。所以目錄給一個可寫的 named volume，設定正本改成單檔
-      # 唯讀疊在上面 —— agent 改不掉 provider／permission，OpenCode 仍寫得進去。
-      # Compose 依 target 深度掛載，父層 volume 先於下面兩個檔案 bind。
-      # 在 config/opencode/ 加檔案要一起加一行；tests/static.sh 會比對目錄內容。
-      - opencode-config:/home/node/.config/opencode
-      - ./config/opencode/opencode.json:/home/node/.config/opencode/opencode.json:ro,z
-      - ./config/opencode/oh-my-opencode-slim.json:/home/node/.config/opencode/oh-my-opencode-slim.json:ro,z
-      # Claude Code credential/state volume；settings 仍是既有 rollback runtime 的設定檔。
-      - claude-credentials:/home/node/.claude
-      - ./managed-claude-settings.json:/home/node/.claude/settings.json:ro,z
-      # OpenCode 的 auth、session storage 與 plugin/npm cache 必須可寫，而
-      # rootfs 是唯讀的，所以各給一個 named volume。
-      - opencode-data:/home/node/.local/share/opencode
-      - opencode-cache:/home/node/.cache
-      # OPENCODE_CONFIG_DIR 之外，OpenCode 還有自己的 state root `~/.opencode`，
-      # 一樣要在裡面寫 `.gitignore` 與 state。少這一個 mount 時 `opencode acp` 會用
-      # 同一種方式死掉：`FileSystem.writeFile (/home/node/.opencode/.gitignore)`，
-      # OpenAB 端只看到 ACP 連線關掉。所以只給這一個路徑一個 named volume，
-      # /home/node 整層維持唯讀 —— 把 home 改可寫等於把上面所有唯讀 mount 的意義拿掉。
-      # 這個路徑不是下面的 /home/node/.openab（OpenAB 自己的 state），兩個都要在。
-      - opencode-state:/home/node/.opencode
+      # CODEX_HOME 必須是 named volume：session rollout 存在 sessions/ 底下，沒有它
+      # session/load 失敗，OpenAB 會直接開新 session、不告訴使用者。Codex 設定以單檔唯讀
+      # 疊在上面（Compose 依 target 深度掛載，父層 volume 先 bind），agent 改不掉 provider。
+      - codex-home:/home/node/.codex
+      - ./config/codex/config.toml:/home/node/.codex/config.toml:ro,z
+      # agent 規則只有 agents/CLAUDE.md 一份；Codex 把 $CODEX_HOME/AGENTS.md 當全域指示讀。
+      - ./agents/CLAUDE.md:/home/node/.codex/AGENTS.md:ro,z
+      # model catalog 放在 volume 外，升級 codex 重產時不用動 volume。
+      - ./config/codex/catalog.json:/etc/codex/catalog.json:ro,z
       - ./runtime/openab:/home/node/.openab:z
       - ./runtime/drafts:/home/node/drafts:z
       # One mount for the whole snapshot root: adding a repo only touches
-      # config/repos.conf. Skills register from the agent-config snapshot.
+      # config/repos.conf. Skills come from the agent-config snapshot, read-only:
+      # 可寫的 skill 目錄會讓被 injection 的 thread 植入跨 PM 持續的 skill。
       - ${SNAPSHOT_ROOT:?set SNAPSHOT_ROOT in .env}:/home/node/code:ro,z
-      - ${SNAPSHOT_ROOT:?set SNAPSHOT_ROOT in .env}/agent-config/skills:/home/node/.claude/skills:ro,z
+      - ${SNAPSHOT_ROOT:?set SNAPSHOT_ROOT in .env}/agent-config/skills:/home/node/.agents/skills:ro,z
       # CodeGraph indexes are SQLite in WAL mode, so they need a writable path.
       # Each snapshot's .codegraph is a relative symlink into this one directory,
       # which keeps repo source read-only and adding a repo free of Compose edits.
       - ${SNAPSHOT_ROOT:?set SNAPSHOT_ROOT in .env}/.index:/home/node/code/.index:z
 
+# 由 scripts/install-host-network.sh 建立；external 讓 `docker compose down` 不會拿掉它。
+networks:
+  work-agent-net:
+    external: true
+
+# 舊 runtime 的 volume（work-agent_opencode-*、work-agent_claude-credentials）刻意不再宣告：
+# 不宣告就不會被 `docker compose down -v` 刪掉，回滾時舊 image 仍接得上。觀察期結束才刪（#36）。
 volumes:
-  claude-credentials:
-  opencode-config:
-  opencode-state:
-  opencode-data:
-  opencode-cache:
+  codex-home:

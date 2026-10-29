@@ -22,10 +22,9 @@ fail() {
 [[ -f "$ENV_FILE" ]] || fail "missing $ENV_FILE (copy env/openab.env.example and fill secrets)"
 [[ $(stat -c '%a' "$ENV_FILE") =~ ^(600|640)$ ]] || fail "$ENV_FILE must have mode 600 or 640"
 
-# The gateway credentials are required by OpenCode and company-image.
 required_keys=(
   SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_LIST_ID SLACK_TEAM_ID SLACK_WORKSPACE_URL WORK_HELPER_ISSUE_MODE
-  COMPANY_GATEWAY_BASE_URL COMPANY_GATEWAY_API_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
+  R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
 )
 for key in "${required_keys[@]}"; do
   grep -q "^${key}=." "$ENV_FILE" || fail "$key is missing from $ENV_FILE"
@@ -33,10 +32,11 @@ done
 grep -q '^WORK_HELPER_ISSUE_MODE=manual$' "$ENV_FILE" || fail "WORK_HELPER_ISSUE_MODE must be manual"
 grep -q '^SLACK_BOT_TOKEN=xoxb-' "$ENV_FILE" || fail "SLACK_BOT_TOKEN must start with xoxb-"
 grep -q '^SLACK_APP_TOKEN=xapp-' "$ENV_FILE" || fail "SLACK_APP_TOKEN must start with xapp-"
-# company-image refuses a plain-http gateway; catch it here instead of at the
-# first Slack request for an image.
-grep -q '^COMPANY_GATEWAY_BASE_URL=https://' "$ENV_FILE" ||
-  fail "COMPANY_GATEWAY_BASE_URL must be an https URL"
+# env_file loads this whole file into the bot container. The gateway key lives only in
+# the host proxy (/etc/work-agent/gateway.env); here the agent could read it. The bot's
+# COMPANY_GATEWAY_BASE_URL is the proxy address that compose.yaml sets over env_file.
+! grep -q '^COMPANY_GATEWAY_API_KEY=' "$ENV_FILE" ||
+  fail "remove COMPANY_GATEWAY_API_KEY from $ENV_FILE (the key belongs to the host proxy; see scripts/install-host-network.sh gateway-env)"
 ! grep -q 'replace-me' "$ENV_FILE" || fail "$ENV_FILE still contains placeholder values"
 
 # R2 credentials are required for both OpenAB configs. Do not probe R2 here:
@@ -52,8 +52,8 @@ for key in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
       ;;
   esac
 done
-grep -Fq "PARSE_DOCUMENT_ALLOWED_HOST: $R2_ALLOWED_HOST" "$ROOT/compose.yaml" ||
-  fail "compose.yaml must set PARSE_DOCUMENT_ALLOWED_HOST to $R2_ALLOWED_HOST"
+grep -Fq "endpoint = \"https://$R2_ALLOWED_HOST\"" "$ROOT/config/openab.toml" ||
+  fail "config/openab.toml [filestore].endpoint must be https://$R2_ALLOWED_HOST"
 
 # STT 是選配，且不是公司 gateway 的延伸假設。兩個值要嘛都沒有、要嘛都填；真正啟用
 # 前還必須把 OpenAB config 的 [stt].enabled 改成 true。
@@ -65,12 +65,15 @@ if [[ -n ${stt_base#STT_BASE_URL=} || -n ${stt_key#STT_API_KEY=} ]]; then
   [[ $stt_base == STT_BASE_URL=https://* ]] || fail "STT_BASE_URL must be an https URL"
 fi
 
-printf 'runtime: opencode\nconfig:  %s\n' "$ROOT/config/openab.toml"
-for f in opencode.json oh-my-opencode-slim.json; do
-  [[ -f "$ROOT/config/opencode/$f" ]] || fail "missing config/opencode/$f"
-  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$ROOT/config/opencode/$f" ||
-    fail "config/opencode/$f is not valid JSON"
-done
+printf 'runtime: codex-acp\nconfig:  %s\n' "$ROOT/config/openab.toml"
+# A catalog that does not parse stops codex from starting at all.
+python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' "$ROOT/config/codex/config.toml" ||
+  fail "config/codex/config.toml is not valid TOML"
+python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["models"]' "$ROOT/config/codex/catalog.json" ||
+  fail "config/codex/catalog.json is not a valid model catalog"
+# The bot joins this external network with the one IP the firewall lets reach the proxy.
+docker network inspect work-agent-net >/dev/null 2>&1 ||
+  fail "docker network work-agent-net missing (run scripts/install-host-network.sh install)"
 
 # The container runs as HOST_UID:HOST_GID (see Dockerfile), so the writable
 # bind mounts must belong to that identity.

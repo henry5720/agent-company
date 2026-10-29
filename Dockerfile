@@ -2,12 +2,9 @@
 ARG OPENAB_IMAGE
 FROM ${OPENAB_IMAGE}
 
-ARG OPENCODE_VERSION
-ARG OMO_VERSION
+ARG CODEX_VERSION
+ARG CODEX_ACP_VERSION
 ARG CODEGRAPH_VERSION
-ARG CLAUDE_AGENT_ACP_VERSION
-ARG CLAUDE_CODE_VERSION
-ARG DOCLING_VERSION
 
 # Bind mounts carry host ownership, so the container user must share the host
 # user's uid/gid. Only /home/node and /usr/local/bin/openab are owned by the
@@ -16,89 +13,54 @@ ARG HOST_UID=1000
 ARG HOST_GID=1000
 
 USER root
-# git：-opencode base image（node:22-trixie-slim）沒有 git，但唯讀 snapshot 偵察
-# 全靠 `git show origin/<branch>:<path>` 這類指令。python3：slack-list 需要。
+# 上游 codex image 有裝 gh；共用 bot 不給任何 GitHub 寫入（spec #21 §1、§3），連同 apt source
+# 一起拿掉，之後的 apt-get 也裝不回來。
+RUN apt-get purge -y gh \
+    && rm -f /etc/apt/sources.list.d/github-cli.list /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && ! command -v gh
+# python3：只給 slack-list、company-image、slack-thread-artifact（都只用 stdlib）。
+# git、curl 上游已有，列出來是因為唯讀 snapshot 偵察與 thread workspace 都靠 git。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl git libglib2.0-0 libgl1 libxcb1 python3 python3-pip \
+    && apt-get install -y --no-install-recommends curl git python3 \
     && rm -rf /var/lib/apt/lists/*
-RUN python3 -c 'import sys; assert (3, 10) <= sys.version_info[:2] < (3, 14), sys.version' \
-    && python3 -m pip install --no-cache-dir --break-system-packages "docling==${DOCLING_VERSION}" \
-    && python3 -c 'import docling; import docling.document_converter'
-ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
-RUN mkdir -p /opt/docling-models \
-    && docling-tools models download layout tableformer --output-dir /opt/docling-models \
-    && python3 -c 'from pathlib import Path; p=Path("/opt/docling-models"); assert p.is_dir() and any(p.iterdir()), "Docling model download produced no artifacts"' \
-    && chmod -R a+rX,a-w /opt/docling-models \
-    && chown -R root:root /opt/docling-models
-USER node
-RUN python3 -c 'from pathlib import Path; import os; p=Path("/opt/docling-models"); assert p.is_dir() and any(p.iterdir()); assert all(os.access(item, os.R_OK | (os.X_OK if item.is_dir() else 0)) for item in p.rglob("*")), "Docling artifacts are not readable by node"'
-USER root
 RUN npm i -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
-# OMO 的 Claude Code specialist 直接執行這個已固定版本的 binary，不用 npx
-# 在 runtime 下載未審核的套件。
-RUN npm i -g "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}"
-RUN npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
-ENV CLAUDE_AGENT_ACP_VERSION=${CLAUDE_AGENT_ACP_VERSION} \
-    CLAUDE_AGENT_ACP_BIN=/usr/local/bin/claude-agent-acp \
-    CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION} \
-    CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
 
-# OpenCode 自包安裝在獨立 prefix，不依賴 OpenAB base image 內的版本。
-# /usr/local/bin/opencode 只保留指向這個 prefix 的 symlink；build 時同時驗證
-# symlink 的 resolved path 與 CLI 的 exact version，避免 base digest 或 package
-# drift 讓 runtime 靜默跑到另一版。OMO 是 OpenCode plugin，用同一份 pin 裝成
-# global package，讓 runtime 不必上網抓 plugin。Claude ACP specialist 直接使用
-# image 內固定版本的 adapter。
+# codex 與 codex-acp 一起裝在獨立 prefix，不用上游 global 裝的那兩個（版本跟 base digest 走）。
+# codex-acp 用 createRequire 解析自己底下的 @openai/codex，所以真正跑哪版 codex 由
+# config/openab.toml 的 CODEX_PATH 決定，指到這裡的 node_modules/.bin/codex。
+# build 時驗：PATH 上的 codex-acp／codex 都解析進這個 prefix、兩者 exact version 相符。
 RUN set -eu; \
-    OPENCODE_PREFIX="/opt/opencode-${OPENCODE_VERSION}"; \
-    npm install --prefix "/opt/opencode-${OPENCODE_VERSION}" "opencode-ai@${OPENCODE_VERSION}"; \
-    test -x "$OPENCODE_PREFIX/node_modules/.bin/opencode"; \
-    rm -f /usr/local/bin/opencode; \
-    ln -s "$OPENCODE_PREFIX/node_modules/.bin/opencode" /usr/local/bin/opencode; \
-    test "$(readlink /usr/local/bin/opencode)" = "$OPENCODE_PREFIX/node_modules/.bin/opencode"; \
-    resolved="$(readlink -f "$(command -v opencode)")"; \
-    test "$resolved" = "$(readlink -f "$OPENCODE_PREFIX/node_modules/.bin/opencode")"; \
-    case "$resolved" in \
-      "$OPENCODE_PREFIX"/node_modules/opencode-ai/*) ;; \
-      *) echo "opencode resolved outside $OPENCODE_PREFIX" >&2; exit 1 ;; \
-    esac; \
-    test "$(opencode --version)" = "$OPENCODE_VERSION"
-RUN npm i -g "oh-my-opencode-slim@${OMO_VERSION}"; \
-    OMO_DIR=/usr/local/lib/node_modules/oh-my-opencode-slim; \
-    test -f "$OMO_DIR/package.json"; \
-    test "$(node -p 'require(process.argv[1]).version' "$OMO_DIR/package.json")" = "$OMO_VERSION"; \
-    OMO_MAIN="$(node -p 'require(process.argv[1]).main || ""' "$OMO_DIR/package.json")"; \
-    test -n "$OMO_MAIN"; test -f "$OMO_DIR/$OMO_MAIN"; test -r "$OMO_DIR/$OMO_MAIN"; \
-    test "$(node -p 'require(process.argv[1]).main' "$OMO_DIR/package.json")" = "$OMO_MAIN"
-RUN test -x "$CLAUDE_AGENT_ACP_BIN" \
-    && test "$(command -v claude-agent-acp)" = "$CLAUDE_AGENT_ACP_BIN" \
-    && npm ls -g --depth=0 "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}" >/dev/null \
-    || { echo "the pinned Claude ACP adapter is missing or mismatched" >&2; exit 1; }
-RUN test -x /usr/local/bin/claude \
-    && claude --version | grep -qF "$CLAUDE_CODE_VERSION" \
-    || { echo "the pinned Claude Code CLI is missing or mismatched" >&2; exit 1; }
+    CODEX_PREFIX="/opt/codex-${CODEX_VERSION}"; \
+    npm uninstall -g @agentclientprotocol/codex-acp @openai/codex; \
+    npm install --prefix "$CODEX_PREFIX" --fetch-retries=3 \
+      "@openai/codex@${CODEX_VERSION}" "@agentclientprotocol/codex-acp@${CODEX_ACP_VERSION}"; \
+    ln -sf "$CODEX_PREFIX/node_modules/.bin/codex-acp" /usr/local/bin/codex-acp; \
+    ln -sf "$CODEX_PREFIX/node_modules/.bin/codex" /usr/local/bin/codex; \
+    for bin in codex-acp codex; do \
+      resolved="$(readlink -f "$(command -v "$bin")")"; \
+      case "$resolved" in \
+        "$CODEX_PREFIX"/node_modules/*) ;; \
+        *) echo "$bin resolved outside $CODEX_PREFIX: $resolved" >&2; exit 1 ;; \
+      esac; \
+    done; \
+    test "$("$CODEX_PREFIX/node_modules/.bin/codex" --version)" = "codex-cli ${CODEX_VERSION}"; \
+    test "$(node -p 'require(process.argv[1]).version' "$CODEX_PREFIX/node_modules/@agentclientprotocol/codex-acp/package.json")" = "$CODEX_ACP_VERSION"; \
+    chmod -R a+rX,go-w "$CODEX_PREFIX"
 
 # 生圖／改圖的唯一入口。它只用 Python 3 stdlib。
 # root 擁有、0755：agent 可以執行，不能改寫（rootfs 本來就是唯讀的，這是第二層）。
 COPY agents/bin/company-image /usr/local/bin/company-image
 COPY agents/bin/slack-thread-artifact /usr/local/bin/slack-thread-artifact
-COPY agents/bin/parse-document /usr/local/bin/parse-document
 RUN chmod 0755 /usr/local/bin/company-image \
     && chown root:root /usr/local/bin/company-image \
     && chmod 0755 /usr/local/bin/slack-thread-artifact \
     && chown root:root /usr/local/bin/slack-thread-artifact \
-    && chmod 0755 /usr/local/bin/parse-document \
-    && chown root:root /usr/local/bin/parse-document \
     && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
 
-# OpenCode 有兩個必須可寫的目錄：OPENCODE_CONFIG_DIR（/home/node/.config/opencode）
-# 與它自己的 state root /home/node/.opencode，兩邊都會寫 `.gitignore` 與 state。
-# compose 各掛一個可寫的 named volume，設定正本只用單檔唯讀疊在 config dir 上。
-# 空的 named volume 會沿用 mount point 在 image 內的 ownership，目錄不存在就會變成
-# root:root，node 寫不進去 —— 所以先建好，讓下面的 chown -R 一起接手。
-# Claude Code 的 credential/state named volume 也會從這個 mount point 繼承
-# ownership；少建這個目錄時 fresh volume 會是 root:root，node 無法登入或寫 state。
-RUN mkdir -p /home/node/.claude /home/node/.config/opencode /home/node/.opencode
+# CODEX_HOME（/home/node/.codex）是 named volume；空 volume 會沿用 mount point 在 image 內的
+# ownership，所以先建好讓下面的 chown -R 接手，否則 fresh volume 是 root:root、codex 寫不進去。
+# /home/node/.agents 是 skills 唯讀 mount 的父目錄。
+RUN mkdir -p /home/node/.codex /home/node/.agents
 
 RUN if [ "$HOST_GID" != "1000" ]; then groupmod -g "$HOST_GID" node; fi \
     && if [ "$HOST_UID" != "1000" ]; then usermod -u "$HOST_UID" -g "$HOST_GID" node; fi \
@@ -106,4 +68,4 @@ RUN if [ "$HOST_GID" != "1000" ]; then groupmod -g "$HOST_GID" node; fi \
 USER node
 RUN company-image --help >/dev/null \
     && slack-thread-artifact --help >/dev/null \
-    && parse-document --help >/dev/null
+    && ! command -v gh && ! command -v opencode && ! command -v claude

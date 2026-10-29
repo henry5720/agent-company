@@ -567,8 +567,10 @@ def test_compose_matches_network_env():
     check("compose does not enable IPv6", "enable_ipv6: true" not in compose)
     proxy = f"http://{NET['WORK_AGENT_GATEWAY_IP']}:{NET['WORK_AGENT_PROXY_PORT']}"
     check("bot gateway URL points at the proxy", proxy in compose or proxy in (ROOT / "env/openab.env.example").read_text())
-    for dns in NET["WORK_AGENT_SANDBOX_DNS"].split(","):
-        check(f"sandbox DNS {dns}", dns in compose)
+    # sandbox service 由 #31 接進 compose；bot 先接上 network（#30）時還沒有 sandbox。
+    if re.search(r"^  [\w-]*sandbox[\w-]*:\s*$", compose, re.M):
+        for dns in NET["WORK_AGENT_SANDBOX_DNS"].split(","):
+            check(f"sandbox DNS {dns}", dns in compose)
 
 
 def main():

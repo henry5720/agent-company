@@ -11,20 +11,20 @@ allow_user_messages = "involved"
 assistant_mode = false
 streaming = false
 
-# OpenAB 使用 OpenCode 原生 ACP（`opencode acp`），模型與 OMO 設定在
-# config/opencode/。
+# OpenAB 直接跑 codex-acp（spec #21 §4）。provider、model 與 catalog 在 config/codex/。
+# 三個 env 只能從這裡給：[agent].env 在 env_clear() 之後加入、會蓋過 inherit_env；
+# OpenAB 不呼叫 session/set_mode，所以初始 mode 只能用 INITIAL_AGENT_MODE。
+# - CODEX_HOME：named volume。沒有它 session/load 失敗，OpenAB 會默默開新 session。
+# - CODEX_PATH：image 內釘版的 codex（config/versions.env 的 CODEX_VERSION）。
+# - agent-full-access：container 內 bwrap 建不了 namespace，其他 mode 的 shell 不是失敗就是
+#   每條都要人按允許。可寫範圍交給 Docker mount 決定。
+# gateway key 不在這裡也不在 container：host proxy 注入（config/caddy/Caddyfile）。
 [agent]
-command = "opencode"
-args = ["acp"]
+command = "codex-acp"
 working_dir = "/home/node/code"
+env = { CODEX_HOME = "/home/node/.codex", CODEX_PATH = "/opt/codex-0.159.0/node_modules/.bin/codex", INITIAL_AGENT_MODE = "agent-full-access" }
 inherit_env = [
-  "COMPANY_GATEWAY_API_KEY",
   "COMPANY_GATEWAY_BASE_URL",
-  "OPENCODE_CONFIG_DIR",
-  "CLAUDE_CODE_EXECUTABLE",
-  "CLAUDE_CONFIG_DIR",
-  "PARSE_DOCUMENT_ALLOWED_HOST",
-  "DOCLING_ARTIFACTS_PATH",
   "SLACK_BOT_TOKEN",
   "SLACK_LIST_ID",
   "SLACK_TEAM_ID",

@@ -1,0 +1,18 @@
+# Codex 設定（spec #21 §4）。以單檔唯讀疊在 CODEX_HOME（named volume `codex-home`）上，
+# agent 改不掉 provider、model 與 catalog 路徑。
+#
+# key 不在 container 裡：host Caddy proxy（config/caddy/Caddyfile）只放行 POST /responses，
+# 由它補上 Authorization。base_url 是 proxy 的位址，正本在 config/host-network.env
+# （WORK_AGENT_GATEWAY_IP:WORK_AGENT_PROXY_PORT），改那邊要一起改這裡與 compose.yaml。
+model_provider = "company"
+model = "gpt-6.1-sol"
+# 只放 gpt-6.1-sol 一筆，消掉每輪回覆開頭的 model metadata warning。內容是該版 codex
+# `codex-rs/models-manager/models.json` 的 gpt-6-sol 那筆、只改 slug；升級 codex 時要重產，
+# parse 失敗 codex 整個起不來。
+model_catalog_json = "/etc/codex/catalog.json"
+
+[model_providers.company]
+name = "Company Gateway"
+base_url = "http://10.231.0.1:18080"
+# 公司 gateway 只提供 Responses API。
+wire_api = "responses"

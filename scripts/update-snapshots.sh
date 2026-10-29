@@ -82,8 +82,15 @@ if [[ ${#indexed[@]} -gt 0 ]]; then
     script+=" then codegraph sync /home/node/code/$name;"
     script+=" else codegraph init /home/node/code/$name; fi; "
   done
-  if SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" run --rm -T --no-deps \
-      --entrypoint sh backlog-agent -c "$script"; then
+  # Plain `docker run` with no network instead of `docker compose run`: the bot service
+  # pins ipv4_address 10.231.0.10 on work-agent-net, so a second container from the
+  # same service would fail with "Address already in use" while the bot is up.
+  # Indexing needs no network; the mounts mirror the bot's snapshot and .index mounts.
+  image=$(SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" config --images backlog-agent)
+  if docker run --rm --network none --read-only --tmpfs /tmp \
+      --cap-drop ALL --security-opt no-new-privileges:true -e CODEGRAPH_TELEMETRY=0 \
+      -v "$ROOT:/home/node/code:ro,z" -v "$INDEX_ROOT:/home/node/code/.index:z" \
+      --entrypoint sh "$image" -c "$script"; then
     printf 'CodeGraph index updated for %d repos\n' "${#indexed[@]}"
   else
     printf 'CodeGraph index skipped (runtime image not built yet?)\n' >&2
