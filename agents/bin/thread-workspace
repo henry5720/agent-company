@@ -47,7 +47,7 @@ EXIT_INVALID_INPUT = 2
 EXIT_RUNTIME = 3
 CLONE_TIMEOUT_SECONDS = 600
 # spec #21 §5：最後修改超過 7 天刪；總量超過 20 GB 從最久沒動的刪起。host 告警
-# （scripts/alerts.py 的 THREAD_WORKSPACE_LIMIT_BYTES）用同一個上限，改這裡要一起改。
+# （scripts/alerts.py 的 THREAD_WORKSPACE_LIMIT_BYTES）用同一個上限，tests/host-alerts.py 比對。
 MAX_AGE_SECONDS = 7 * 86400
 MAX_TOTAL_BYTES = 20 * 1024 ** 3
 KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")

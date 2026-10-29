@@ -42,7 +42,7 @@ CONTAINERS = ("work-agent", "work-agent-sandbox-1", "work-agent-sandbox-2")
 HOUR, DAY = 3600, 86400
 GIB = 1024 ** 3
 ROOT_FREE_MIN = 0.20
-# 跟 agents/bin/thread-workspace 的 MAX_TOTAL_BYTES 同一個上限。
+# 跟 agents/bin/thread-workspace 的 MAX_TOTAL_BYTES 同一個上限（tests/host-alerts.py 比對）。
 THREAD_WORKSPACE_LIMIT_BYTES = 20 * GIB
 CODEX_HOME_LIMIT_BYTES = 2 * GIB
 REPORT_STALE_SECONDS = 3 * HOUR
@@ -50,6 +50,7 @@ RATE_FACTOR = 5
 RATE_WARMUP_SECONDS = 7 * DAY
 RATE_BASELINE_HOURS = 7 * 24
 IMAGE_DAILY_LIMIT = 50
+# 等於 agents/bin/company-image 的 USER_AGENT（tests/host-alerts.py 比對）。
 IMAGE_USER_AGENT = "work-agent-company-image"
 REPEAT_SECONDS = DAY
 WEBHOOK_TIMEOUT_SECONDS = 15

@@ -53,6 +53,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+# 讓 host 告警從 proxy 的 access log 分出生圖請求。scripts/alerts.py 的 IMAGE_USER_AGENT
+# 必須相同，tests/host-alerts.py 比對。
+USER_AGENT = "work-agent-company-image"
+
 # 生圖用的模型，由 gateway 解讀；proxy 不看 body。
 MODEL = "gpt-5.6-terra"
 
@@ -367,9 +371,7 @@ def call_gateway(body: dict) -> bytes:
         endpoint,
         data=json.dumps(body).encode("utf-8"),
         # 固定兩個 header，沒有 --header 這種東西；Authorization 由 host proxy 補。
-        # User-Agent 讓 host 告警從 proxy 的 access log 分出生圖請求（scripts/alerts.py 的
-        # IMAGE_USER_AGENT），改這裡要一起改。
-        headers={"Content-Type": "application/json", "User-Agent": "work-agent-company-image"},
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
     try:

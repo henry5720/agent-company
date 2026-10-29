@@ -43,12 +43,24 @@ def check(name, condition, detail=""):
         failures.append(f"{name}: {detail}" if detail else name)
 
 
-def load():
+def load(path=ALERTS, name="alerts"):
     sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_loader("alerts", importlib.machinery.SourceFileLoader("alerts", str(ALERTS)))
+    spec = importlib.util.spec_from_loader(name, importlib.machinery.SourceFileLoader(name, str(path)))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def check_values_shared_with_the_clis(cli):
+    """告警跟 bot 端 CLI 共用的值：分在兩個 runtime（host 與 container），各寫一份、這裡比對。"""
+    workspace = load(ROOT / "agents/bin/thread-workspace", "thread_workspace")
+    image = load(ROOT / "agents/bin/company-image", "company_image")
+    check("thread workspace alert limit equals thread-workspace MAX_TOTAL_BYTES",
+          cli.THREAD_WORKSPACE_LIMIT_BYTES == workspace.MAX_TOTAL_BYTES,
+          f"{cli.THREAD_WORKSPACE_LIMIT_BYTES} != {workspace.MAX_TOTAL_BYTES}")
+    check("image alert counts the User-Agent company-image sends",
+          cli.IMAGE_USER_AGENT == getattr(image, "USER_AGENT", None),
+          f"{cli.IMAGE_USER_AGENT!r} != {getattr(image, 'USER_AGENT', None)!r}")
 
 
 class FakeWebhook:
@@ -318,6 +330,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="host-alerts-test-"))
     webhook = FakeWebhook()
     try:
+        check_values_shared_with_the_clis(cli)
         env = Env(cli, tmp, webhook)
         check_quiet_run(env)
         check_responses_rate(env)
