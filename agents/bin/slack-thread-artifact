@@ -65,7 +65,7 @@ class RuntimeFailure(Exception):
     pass
 
 
-class DraftReplaced(Exception):
+class ArtifactReplaced(Exception):
     """上傳成功後，那個檔名已經不是當初讀的 inode。"""
 
 
@@ -92,7 +92,7 @@ def source_roots() -> tuple[tuple[Path, bool], ...]:
     return ((DRAFTS_ROOT, True), (WORK_ROOT, False), (OUT_ROOT, False))
 
 
-def draft_parts(raw: str) -> tuple[Path, tuple[str, ...], bool]:
+def artifact_parts(raw: str) -> tuple[Path, tuple[str, ...], bool]:
     """找出 --file 落在哪個 root，回傳 (root, 相對片段, 要不要刪)。純字串運算，不碰檔案系統。
 
     normpath 只做字面折疊，所以 `..` 走不出 root；真正的保證來自後面的 dirfd 走法。
@@ -161,7 +161,7 @@ def identity(info: os.stat_result) -> tuple:
     )
 
 
-class Draft:
+class LockedArtifact:
     """一份已被 dirfd 鎖定的產物：資料在記憶體，刪除只走同一個 parent fd。"""
 
     def __init__(
@@ -184,7 +184,7 @@ class Draft:
         """刪掉當初讀的那個檔案，不是現在剛好叫這個名字的東西。"""
         current = os.lstat(self.name, dir_fd=self.parent_fd)
         if not stat.S_ISREG(current.st_mode) or identity(current) != identity(self.info):
-            raise DraftReplaced(
+            raise ArtifactReplaced(
                 f"{self.name} was replaced after it was read; left in place for cleanup"
             )
         os.unlink(self.name, dir_fd=self.parent_fd)
@@ -192,7 +192,7 @@ class Draft:
     def close(self) -> None:
         os.close(self.parent_fd)
 
-    def __enter__(self) -> "Draft":
+    def __enter__(self) -> "LockedArtifact":
         return self
 
     def __exit__(self, *_exc) -> bool:
@@ -200,10 +200,10 @@ class Draft:
         return False
 
 
-def open_draft(raw: str) -> Draft:
+def open_artifact(raw: str) -> LockedArtifact:
     """從 --file 所在的 root 逐段走到檔案，讀進記憶體，並把 parent fd 留著給刪除用。"""
     require_secure_flags()
-    root, parts, delete_after_upload = draft_parts(raw)
+    root, parts, delete_after_upload = artifact_parts(raw)
     name = parts[-1]
     mime = ALLOWED_TYPES.get(PurePosixPath(name).suffix.lower())
     if mime is None:
@@ -239,7 +239,7 @@ def open_draft(raw: str) -> Draft:
             os.close(fd)
         for extra in ancestors:
             os.close(extra)
-    return Draft(parent_fd, name, data, mime, info, delete_after_upload)
+    return LockedArtifact(parent_fd, name, data, mime, info, delete_after_upload)
 
 
 def validate_context(channel: str, thread_ts: str) -> tuple[str, str]:
@@ -312,21 +312,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def deliver(draft: Draft, channel: str, thread_ts: str, token: str) -> None:
+def deliver(artifact: LockedArtifact, channel: str, thread_ts: str, token: str) -> None:
     ticket = slack_form(
         "files.getUploadURLExternal",
-        {"filename": draft.name, "length": str(len(draft.data))},
+        {"filename": artifact.name, "length": str(len(artifact.data))},
         token,
     )
     upload_url, file_id = ticket.get("upload_url"), ticket.get("file_id")
     if not isinstance(file_id, str) or not file_id:
         raise RuntimeFailure("Slack did not return file_id")
-    upload(upload_url, draft.data, draft.mime)
+    upload(upload_url, artifact.data, artifact.mime)
     slack_form(
         "files.completeUploadExternal",
         {
             # form 裡的 `files` 是一個 JSON 字串欄位，不是 nested JSON body。
-            "files": json.dumps([{"id": file_id, "title": draft.name}], separators=(",", ":")),
+            "files": json.dumps([{"id": file_id, "title": artifact.name}], separators=(",", ":")),
             "channel_id": channel,
             "thread_ts": thread_ts,
         },
@@ -339,31 +339,31 @@ def main(argv: list[str]) -> int:
     try:
         channel, thread_ts = validate_context(args.channel, args.thread_ts)
         token = slack_token()
-        draft = open_draft(args.file)
+        artifact = open_artifact(args.file)
     except (InputError, RuntimeFailure) as exc:
         print(f"slack-thread-artifact: {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT if isinstance(exc, InputError) else EXIT_RUNTIME
 
-    with draft:
+    with artifact:
         try:
-            deliver(draft, channel, thread_ts, token)
+            deliver(artifact, channel, thread_ts, token)
         except (RuntimeFailure, OSError) as exc:
             print(f"slack-thread-artifact: {exc}", file=sys.stderr)
             return EXIT_RUNTIME
         # 只有 drafts 上傳成功就刪；work 與 out 由各自的 cleanup 收。檔案已經送到
         # 對方手上，所以刪不掉不算交付失敗：說清楚並留給 24 小時 cleanup，不要回
         # 非零讓 agent 以為要重傳。
-        if draft.delete_after_upload:
+        if artifact.delete_after_upload:
             try:
-                draft.unlink()
-            except DraftReplaced as exc:
+                artifact.unlink()
+            except ArtifactReplaced as exc:
                 print(f"slack-thread-artifact: {exc}", file=sys.stderr)
             except OSError as exc:
                 print(
-                    f"slack-thread-artifact: uploaded {draft.name} but could not delete it: {exc}",
+                    f"slack-thread-artifact: uploaded {artifact.name} but could not delete it: {exc}",
                     file=sys.stderr,
                 )
-        print(f"uploaded {draft.name} to {channel}:{thread_ts}")
+        print(f"uploaded {artifact.name} to {channel}:{thread_ts}")
     return 0
 
 
