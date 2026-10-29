@@ -68,7 +68,7 @@ company-image edit --prompt "<要改什麼>" --name <檔名> --source <來源圖
 
 - `--size` 只能是 `1024x1024`（預設）、`1024x1536`、`1536x1024`。要別的尺寸就說目前只有這三種。
 - `--name` 只能用小寫字母、數字與 `-`，不要帶副檔名或斜線。
-- `--source` 必須是絕對路徑，而且要在 `/home/node/drafts`、`/home/node/.openab` 或 `/tmp` 底下。要拿 thread workspace 或 out 裡的圖當來源，先 `cp` 到 `/tmp`。
+- `--source` 必須是絕對路徑，而且要在 `/home/node/drafts`、`/home/node/work`（thread workspace）、`/home/node/out`（sandbox 截圖與產物）、`/home/node/.openab` 或 `/tmp` 底下。`/home/node/code` 的 snapshot 不能當來源。
 - 成功時它會把 PNG 寫進 `/home/node/drafts/<UTC 日期>/`，並在 stdout 印出完整路徑。
 - exit code 2 是你給錯參數，自己改；exit code 3 是環境或 gateway 的問題，照「回覆」那節處理。
 

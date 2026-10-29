@@ -38,8 +38,9 @@ env 裡。那等於把 endpoint、header、model、輸出路徑全部交給模�
   - 參數只有 `--prompt`、`--size`、`--name`，以及 `edit` 的 `--source`。
   - `--size` 只收 `1024x1024`、`1024x1536`、`1536x1024`。
   - `--name` 只收 `[a-z0-9-]`，所以輸出走不出 drafts。
-  - `--source` 必須是絕對路徑，resolve 之後必須落在 `/home/node/drafts`、`/home/node/.openab`
-    或 `/tmp`，而且開頭必須是 PNG 或 JPEG magic。唯讀 snapshot 不在允許清單裡。
+  - `--source` 必須是絕對路徑，落在 `agents/bin/company-image` 的 `SOURCE_ROOTS` 底下（spec #21 §11
+    加入 thread workspace 與 sandbox out），從 root 逐段 `O_NOFOLLOW` 開，開頭必須是 PNG 或 JPEG
+    magic。唯讀 snapshot 不在允許清單裡。
   - 沒有 endpoint、header、model、輸出路徑、重試次數這些參數。
 - gateway 位置只從 runtime env `COMPANY_GATEWAY_BASE_URL` 讀（production 是 host proxy
   `http://10.231.0.1:18080`）。原始碼裡沒有 URL，也不讀 key、不送 `Authorization`；`tests/static.sh` 會掃。

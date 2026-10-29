@@ -223,9 +223,17 @@ def main() -> int:
         for directory in (drafts, staging, outside):
             directory.mkdir()
 
+        # spec #21 §11：edit 的來源可以直接是 thread workspace 與 sandbox 產物（不必先 cp 到
+        # /tmp）；唯讀 snapshot 仍不行。用 production 的 root 清單、在碰檔案系統之前就被擋。
+        os.environ["COMPANY_GATEWAY_BASE_URL"] = FAKE_BASE_URL
+        code, _, err = run(cli, ["edit", "--prompt", "x", "--name", "n", "--source", "/home/node/code/app/logo.png"])
+        check("snapshot source rejected as invalid input", code == 2, f"code={code} stderr={err.strip()}")
+        for root in ("/home/node/drafts", "/home/node/work", "/home/node/out", "/home/node/.openab", "/tmp"):
+            check(f"allowed source roots include {root}", root in err, err.strip())
+        check("snapshot is not an allowed source root", "/home/node/code" not in err.split("one of:", 1)[-1], err.strip())
+
         cli.DRAFTS_ROOT = drafts
         cli.SOURCE_ROOTS = (drafts, staging)
-        os.environ["COMPANY_GATEWAY_BASE_URL"] = FAKE_BASE_URL
         os.environ["COMPANY_GATEWAY_API_KEY"] = FAKE_KEY
 
         # ------------------------------------------------ generate happy path

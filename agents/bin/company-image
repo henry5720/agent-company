@@ -86,9 +86,17 @@ JPEG_MAGIC = b"\xff\xd8\xff"
 # 唯一的輸出位置。drafts 是 container 內少數可寫的路徑之一。
 DRAFTS_ROOT = Path("/home/node/drafts")
 
-# `edit` 的來源只能在這幾個 agent 自己寫得到的位置。唯讀 snapshot 不在裡面：
-# repo 源碼沒有理由被送進 gateway。
-SOURCE_ROOTS = (Path("/home/node/drafts"), Path("/home/node/.openab"), Path("/tmp"))
+# `edit` 的來源只能在這幾個位置（spec #21 §11）：agent 寫得到的 drafts、.openab、/tmp、
+# thread workspace，加上 bot 唯讀的 sandbox 產物 out（截圖常是改圖的來源）。全部只讀，
+# 一樣從 root 的 dirfd 逐段 O_NOFOLLOW 走。唯讀 snapshot 不在裡面：repo 源碼沒有理由
+# 被送進 gateway。
+SOURCE_ROOTS = (
+    Path("/home/node/drafts"),
+    Path("/home/node/work"),
+    Path("/home/node/out"),
+    Path("/home/node/.openab"),
+    Path("/tmp"),
+)
 
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 
@@ -668,7 +676,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     edit.add_argument(
         "--source",
         required=True,
-        help="來源圖片的絕對路徑，必須在 drafts、.openab 或 /tmp 底下",
+        help="來源圖片的絕對路徑，必須在 drafts、work、out、.openab 或 /tmp 底下",
     )
     return parser.parse_args(argv)
 
