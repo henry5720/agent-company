@@ -14,7 +14,9 @@ scratch 再跑，產物只寫到 out/<key>/，bot 從 /home/node/out/<key>/ 讀�
   process（例如背景的 dev server）全部收掉。
 - 不帶任何 token，也不接受 runner URL 參數；runner 位置只看
   SANDBOX_RUNNER_URLS（空白或逗號分隔）。同一個 thread 先試同一格，保住那格
-  的 node_modules；那格在忙或連不上才換下一格。
+  的 node_modules；那格在忙（409）或還沒送出 request 就連不上（連線被拒、名稱
+  解析不到）才換下一格。送出之後才斷（逾時、連線中斷、回應不是 JSON）不換格：
+  job 可能已經在那格跑了，重送會讓同一個指令跑兩次。
 - 退出碼：指令自己的退出碼；逾時 124；輸入錯誤 2；所有格子都忙或連不上 3。
 """
 
@@ -26,6 +28,7 @@ import json
 import os
 import posixpath
 import re
+import socket
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -33,10 +36,12 @@ from urllib.request import Request, urlopen
 WORK_ROOT = "/home/node/work"
 OUT_ROOT = "/home/node/out"
 DEFAULT_RUNNER_URLS = "http://prototype-sandbox-1:8080 http://prototype-sandbox-2:8080"
-KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")
-REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+# 格式 pattern 跟 thread-workspace、slack-thread-artifact、sandbox/runner 逐字相同
+# （tests/format-patterns.py 比對）；一律 fullmatch，`$` 會放過結尾的換行。
 CHANNEL_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
 THREAD_TS_PATTERN = re.compile(r"^[0-9]{10,13}\.[0-9]{1,9}$")
+KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")
+REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 DEFAULT_TIMEOUT_SECONDS = 15 * 60
 MAX_TIMEOUT_SECONDS = 15 * 60
 HTTP_MARGIN_SECONDS = 60
@@ -64,13 +69,12 @@ def workspace_of(raw: str) -> tuple[str, str]:
     if not normalized.startswith(prefix):
         raise InputError(f"repo path must live under {WORK_ROOT}; use thread-workspace first")
     parts = normalized[len(prefix):].split("/")
-    if len(parts) != 3 or parts[1] != "repos" or not KEY_PATTERN.match(parts[0]) or not REPO_PATTERN.match(parts[2]):
+    if len(parts) != 3 or parts[1] != "repos" or not KEY_PATTERN.fullmatch(parts[0]) or not REPO_PATTERN.fullmatch(parts[2]):
         raise InputError(f"repo path must be {WORK_ROOT}/<channel>-<thread_ts>/repos/<repo>")
     return parts[0], "/".join(parts)
 
 
 def thread_key(channel: str, thread_ts: str) -> str:
-    # fullmatch：`$` 會放過結尾的換行。
     if not CHANNEL_PATTERN.fullmatch(channel):
         raise InputError("channel_id must be a Slack channel ID such as C0123456789")
     if not THREAD_TS_PATTERN.fullmatch(thread_ts):
@@ -114,7 +118,14 @@ def post(url: str, payload: dict, timeout: int) -> dict:
         headers={"Content-Type": "application/json"},
     )
     with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read())
+        body = response.read()
+    try:
+        reply = json.loads(body)
+    except ValueError as exc:
+        raise RuntimeFailure(f"{url}: runner reply is not JSON") from exc
+    if not isinstance(reply, dict):
+        raise RuntimeFailure(f"{url}: runner reply is not a JSON object")
+    return reply
 
 
 def error_message(exc: HTTPError) -> str:
@@ -135,8 +146,13 @@ def dispatch(key: str, payload: dict) -> dict:
             if exc.code in (400, 404):
                 raise InputError(error_message(exc)) from exc
             raise RuntimeFailure(f"{url}: HTTP {exc.code}: {error_message(exc)}") from exc
-        except (URLError, OSError) as exc:
-            tried.append(f"{url} unreachable ({getattr(exc, 'reason', exc)})"); continue
+        except URLError as exc:
+            if not isinstance(exc.reason, (ConnectionRefusedError, socket.gaierror)):
+                raise RuntimeFailure(f"{url}: {exc.reason}; not retried on another slot (the job may have started)") from exc
+            tried.append(f"{url} unreachable ({exc.reason})"); continue
+        except OSError as exc:
+            # 逾時、連線中斷：request 已經送出，job 可能在跑，不換格重送。
+            raise RuntimeFailure(f"{url}: {exc}; not retried on another slot (the job may have started)") from exc
     raise RuntimeFailure("all prototype sandboxes are busy or unreachable: " + "; ".join(tried))
 
 

@@ -43,6 +43,15 @@ done
 }
 export SANDBOX_NODE_IMAGE
 compose() { docker compose -f "$ROOT/compose.yaml" "$@"; }
+# The proxy address the bot must see; derived from the network source of truth rather
+# than copied here (compose.yaml cannot read that file, so tests/static.sh compares it).
+NETWORK_FILE="$ROOT/config/host-network.env"
+proxy_ip=$(read_env_value "$NETWORK_FILE" WORK_AGENT_GATEWAY_IP) &&
+  proxy_port=$(read_env_value "$NETWORK_FILE" WORK_AGENT_PROXY_PORT) || {
+  printf 'FAIL: WORK_AGENT_GATEWAY_IP/WORK_AGENT_PROXY_PORT missing in %s\n' "$NETWORK_FILE" >&2
+  exit 1
+}
+PROXY_URL="http://$proxy_ip:$proxy_port"
 
 "$ROOT/scripts/preflight.sh"
 compose build --pull
@@ -67,9 +76,10 @@ compose exec -T backlog-agent sh -lc \
     test ! -w /usr/local/bin/company-image'
 # The gateway key lives only in the host proxy; the bot reaches the gateway through
 # the proxy address. `env` is the container env every agent process starts from.
+# shellcheck disable=SC2016 # $COMPANY_GATEWAY_BASE_URL is expanded inside the container
 compose exec -T backlog-agent sh -lc \
-  'test "$COMPANY_GATEWAY_BASE_URL" = http://10.231.0.1:18080 &&
-   ! env | grep -q "^COMPANY_GATEWAY_API_KEY="'
+  'test "$COMPANY_GATEWAY_BASE_URL" = "$1" &&
+   ! env | grep -q "^COMPANY_GATEWAY_API_KEY="' sh "$PROXY_URL"
 # Retired runtimes and GitHub CLI must not be reachable from the agent.
 compose exec -T backlog-agent sh -lc \
   '! command -v gh && ! command -v opencode && ! command -v claude && ! command -v claude-agent-acp'

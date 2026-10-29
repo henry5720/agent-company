@@ -204,6 +204,29 @@ def check_notify_failure(cli, slack):
     reset(work); slack.posts.clear()
 
 
+def check_os_error_does_not_abort(cli):
+    """一個目錄刪不掉（OSError）不能讓整輪中止：其他照清、仍印 remaining_bytes、exit 非 0。"""
+    if os.geteuid() == 0:
+        print("thread-workspace-cleanup.py: running as root; OSError case skipped")
+        return
+    work = cli.WORK_ROOT
+    stuck = work / ".cleanup-C0123456789-1710000000.000041-123"
+    locked = stuck / "repos" / "app" / "locked"
+    locked.mkdir(parents=True); (locked / "file").write_text("x")
+    locked.chmod(0o500)
+    old = make_thread(work, "C0123456789-1710000000.000042", age_days=8)
+    try:
+        code, out, err = run(cli, ["cleanup"], {"SLACK_BOT_TOKEN": "xoxb-test"})
+    finally:
+        locked.chmod(0o700)
+    check("OSError on one entry exits non-zero", code == cli.EXIT_RUNTIME, f"code={code} err={err!r}")
+    check("OSError names the entry", stuck.name in err, err)
+    check("other threads still cleaned after an OSError", not old.exists())
+    last = out.strip().splitlines()[-1] if out.strip() else ""
+    check("remaining_bytes still printed after an OSError", last.startswith("remaining_bytes="), out)
+    reset(work)
+
+
 def check_usage(cli):
     code, _, _ = run(cli, ["cleanup", "extra"])
     check("cleanup takes no arguments", code == cli.EXIT_INVALID_INPUT, f"code={code}")
@@ -220,6 +243,7 @@ def main():
         check_size(cli, slack)
         check_symlinks_and_noise(cli, slack, root)
         check_notify_failure(cli, slack)
+        check_os_error_does_not_abort(cli)
     finally:
         slack.close(); shutil.rmtree(root, ignore_errors=True)
     if failures:

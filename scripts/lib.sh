@@ -1,5 +1,15 @@
 # Shared helpers. Source this, do not execute it.
 
+# Print one KEY's value from a KEY=value file without sourcing it (the file may hold
+# other secrets or shell characters). Returns 1 when the key is absent.
+read_env_value() {
+  local file=$1 want=$2 key value
+  while IFS='=' read -r key value; do
+    [[ $key == "$want" ]] && { printf '%s' "$value"; return 0; }
+  done < "$file"
+  return 1
+}
+
 # Read KEY=value pairs from the repo's .env without executing it, expanding the
 # literal ${HOME} that .env.example ships with. Values already present in the
 # environment win.
@@ -37,7 +47,7 @@ CRON_MARKERS=("$CRON_MARKER_SYNC" "$CRON_MARKER_CLEANUP" "$CRON_MARKER_WORKSPACE
 # Minutes are spread so nothing lands on the sync run at :00, which rebuilds the
 # CodeGraph indexes with a docker run and is the heavy job of the hour:
 #   :17 artifact cleanup — drafts（agent-config slack-list）＋ CODEX_HOME sessions
-#   :27 thread workspace（7 天／20 GB，bot 內）＋ out（24 小時，sandbox 內）
+#   :27 thread workspace（bot 內）＋ out（sandbox 內）；保留期限各在自己的 CLI 裡
 #   :47 alerts — after both cleanups, so it reads this hour's reported sizes
 #   Sunday 04:37 pnpm store prune（sandbox 內）
 render_crontab() {
@@ -54,6 +64,23 @@ render_crontab() {
     '37 4 * * 0' "$snapshot_root" "$root/scripts/prune-pnpm-store.sh" "$CRON_MARKER_PNPM"
   printf '%s %q %s\n' \
     '47 * * * *' "$root/scripts/alerts.sh" "$CRON_MARKER_ALERTS"
+}
+
+# Print the first prototype sandbox service we can exec into. The probe runs `true`
+# so "the container is down / exec failed" is told apart from "the real command ran
+# and failed": callers fall over to slot 2 only for the former, and a failing
+# command is never run a second time in the other slot. Both slots mount the same
+# runtime/out and pnpm-store, so either one can do the host jobs.
+live_sandbox() {
+  local root=$1 service
+  for service in prototype-sandbox-1 prototype-sandbox-2; do
+    if docker compose -f "$root/compose.yaml" exec -T "$service" true; then
+      printf '%s\n' "$service"
+      return 0
+    fi
+    printf 'cannot exec into %s.\n' "$service" >&2
+  done
+  return 1
 }
 
 # Shared start of every scheduled job: state dir, one rotation of its own log

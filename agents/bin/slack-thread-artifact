@@ -44,6 +44,7 @@ WORK_ROOT = Path("/home/node/work")
 OUT_ROOT = Path("/home/node/out")
 SLACK_API = "https://slack.com/api"
 ALLOWED_TYPES = {".png": "image/png", ".md": "text/markdown", ".html": "text/html"}
+# 跟 thread-workspace、sandbox-run、sandbox/runner 逐字相同（tests/format-patterns.py 比對）；一律 fullmatch。
 CHANNEL_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
 THREAD_TS_PATTERN = re.compile(r"^[0-9]{10,13}\.[0-9]{1,9}$")
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"

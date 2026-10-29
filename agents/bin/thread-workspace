@@ -37,6 +37,8 @@ from urllib.request import Request, urlopen
 
 WORK_ROOT = Path("/home/node/work")
 SNAPSHOT_ROOT = Path("/home/node/code")
+# 格式 pattern 跟 sandbox-run、slack-thread-artifact、sandbox/runner 逐字相同
+# （tests/format-patterns.py 比對）；一律 fullmatch，`$` 會放過結尾的換行。
 CHANNEL_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
 THREAD_TS_PATTERN = re.compile(r"^[0-9]{10,13}\.[0-9]{1,9}$")
 # 開頭必須是英數：擋掉 `.`、`..`、隱藏目錄，也擋掉會被 git 當成選項的 `-` 開頭。
@@ -48,7 +50,7 @@ CLONE_TIMEOUT_SECONDS = 600
 # （scripts/alerts.py 的 THREAD_WORKSPACE_LIMIT_BYTES）用同一個上限，改這裡要一起改。
 MAX_AGE_SECONDS = 7 * 86400
 MAX_TOTAL_BYTES = 20 * 1024 ** 3
-KEY_PATTERN = re.compile(r"^([CDG][A-Z0-9]{8,32})-([0-9]{10,13}\.[0-9]{1,9})$")
+KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")
 TRASH_PREFIX = ".cleanup-"
 SLACK_API = "https://slack.com/api"
 SLACK_TIMEOUT_SECONDS = 15
@@ -258,7 +260,8 @@ def remove_thread(root_fd: int, name: str, seen: os.stat_result) -> None:
 
 
 def notify(key: str, token: str) -> None:
-    channel, thread_ts = KEY_PATTERN.fullmatch(key).groups()
+    # key 已經過 KEY_PATTERN；channel 與 thread_ts 都不含 `-`。
+    channel, thread_ts = key.split("-", 1)
     if not token:
         raise RuntimeFailure("SLACK_BOT_TOKEN is not set")
     request = Request(
@@ -285,7 +288,8 @@ def cleanup() -> int:
 
     只看 WORK_ROOT 底下名字符合 `<channel_id>-<thread_ts>` 的真目錄；其他東西（含
     symlink）不碰。每刪一個就在那個 thread 貼 NOTICE。通知失敗不會留著不刪（磁碟
-    優先），但整次 exit 非 0，讓 host cron 的 log 記成 FAILED。最後一行印
+    優先），但整次 exit 非 0，讓 host cron 的 log 記成 FAILED；單一目錄掃不了或刪不掉
+    （OSError）也一樣記下來、繼續清其他的、exit 非 0。最後一行印
     `remaining_bytes=<N>`，host 告警用它判斷「清完仍超過上限」。
     """
     require_secure_flags()
@@ -295,15 +299,27 @@ def cleanup() -> int:
     try:
         threads = []
         for name in sorted(os.listdir(root_fd)):
+            # 單一目錄的 OSError（權限、掃描中被刪）只記下來繼續清別的；整輪中止的話
+            # 其他 thread 不會被清，host 也拿不到 remaining_bytes。
             if name.startswith(TRASH_PREFIX):
                 # 上一次刪到一半被中斷留下的暫存名：直接收掉，不再通知。
-                st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
-                if stat.S_ISDIR(st.st_mode):
-                    shutil.rmtree(name, dir_fd=root_fd)
+                try:
+                    st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                    if stat.S_ISDIR(st.st_mode):
+                        shutil.rmtree(name, dir_fd=root_fd)
+                except OSError as exc:
+                    print(f"FAILED to remove leftover {name}: {exc}", file=sys.stderr)
+                    problems += 1
                 continue
             if not KEY_PATTERN.fullmatch(name):
                 continue
-            top, newest, used = scan(root_fd, name)
+            try:
+                top, newest, used = scan(root_fd, name)
+            except OSError as exc:
+                # 量不到大小：這個 thread 不刪、不算進 remaining_bytes。
+                print(f"FAILED to scan {name}: {exc}", file=sys.stderr)
+                problems += 1
+                continue
             if not stat.S_ISDIR(top.st_mode):
                 print(f"skip {name}: not a real directory", file=sys.stderr)
                 continue

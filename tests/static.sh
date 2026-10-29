@@ -212,6 +212,27 @@ assert sorted(sandboxes) == ['prototype-sandbox-1', 'prototype-sandbox-2'], \
     'agents/bin/sandbox-run defaults to http://prototype-sandbox-{1,2}:<runner port>'
 runner_defaults = re.search(r'^DEFAULT_RUNNER_URLS = "([^"]+)"', (root / 'agents/bin/sandbox-run').read_text(), re.M).group(1).split()
 assert runner_defaults == [f"http://{name}:{host_net['WORK_AGENT_RUNNER_PORT']}" for name in sorted(sandboxes)], runner_defaults
+# runner port：Dockerfile 與 compose 讀不到 host-network.env。Dockerfile 的 ENV 是唯一寫死的地方，
+# EXPOSE、compose healthcheck 與 runner 都讀那個 env（#21 review）。
+assert re.search(rf"^\s+SANDBOX_RUNNER_PORT={host_net['WORK_AGENT_RUNNER_PORT']} \\$", sandbox_dockerfile, re.M), \
+    'sandbox/Dockerfile SANDBOX_RUNNER_PORT must equal WORK_AGENT_RUNNER_PORT in config/host-network.env'
+assert 'EXPOSE ${SANDBOX_RUNNER_PORT}\n' in sandbox_dockerfile, 'EXPOSE must read SANDBOX_RUNNER_PORT'
+runner_source = (root / 'sandbox/runner').read_text()
+assert 'int(os.environ["SANDBOX_RUNNER_PORT"])' in runner_source, 'runner must take its port from the image env, not a default'
+for name, svc in sandboxes.items():
+    probe = ' '.join(svc['healthcheck']['test'])
+    assert "os.environ['SANDBOX_RUNNER_PORT']" in probe and not re.search(r'127\.0\.0\.1:\d', probe), \
+        f'{name} healthcheck must read SANDBOX_RUNNER_PORT, not a copied port: {probe}'
+# deploy.sh 驗 bot 內的 proxy 位址：從 host-network.env 推出來，不另寫一份。
+assert not re.search(r'\b\d+\.\d+\.\d+\.\d+:\d+', deploy), 'deploy.sh must not hardcode the proxy address'
+proxy_start = deploy.index('NETWORK_FILE=')
+proxy_end = deploy.index('"$ROOT/scripts/preflight.sh"', proxy_start)
+derived = subprocess.run(
+    ['bash', '-c', 'set -euo pipefail; ROOT="$1"; source "$ROOT/scripts/lib.sh"; ' + deploy[proxy_start:proxy_end] + 'printf %s "$PROXY_URL"', 'test', str(root)],
+    env=clean_env, capture_output=True, text=True,
+)
+assert derived.returncode == 0 and derived.stdout == PROXY, f'deploy.sh proxy URL {derived.stdout!r} != {PROXY!r}: {derived.stderr}'
+assert '"$PROXY_URL"' in deploy[proxy_end:], 'deploy.sh must check the bot env against the derived PROXY_URL'
 SANDBOX_TAG = f"work-agent-sandbox:node{versions['SANDBOX_NODE_IMAGE'].split('@')[0].split(':')[1]}-playwright{versions['PLAYWRIGHT_VERSION']}"
 scratch_volumes = set()
 for name, svc in sandboxes.items():
@@ -312,6 +333,7 @@ fi
 "$ROOT/tests/image-runtime.py"
 "$ROOT/tests/slack-thread-artifact.py"
 "$ROOT/tests/artifact-path-safety.py"
+"$ROOT/tests/format-patterns.py"
 "$ROOT/tests/sandbox-runner.py"
 "$ROOT/tests/sandbox-run.py"
 "$ROOT/tests/sandbox-attachment.py"

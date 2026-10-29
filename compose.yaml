@@ -105,7 +105,8 @@ services:
       - 1.1.1.1
       - 8.8.8.8
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      # port 讀 image 的 SANDBOX_RUNNER_PORT（sandbox/Dockerfile），不在這裡另寫一份。
+      test: ["CMD", "python3", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ['SANDBOX_RUNNER_PORT'], timeout=5)"]
       interval: 60s
       timeout: 10s
       retries: 3

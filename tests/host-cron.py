@@ -23,6 +23,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FAKE_DOCKER = ROOT / "tests/fake-docker"
 DAY = 86400
+# 換格只看「exec 進不進得去」：先在那格跑 `true`，進得去才在那格跑真正的指令。
+PROBE1 = "prototype-sandbox-1 true"
+PROBE2 = "prototype-sandbox-2 true"
 failures: list[str] = []
 
 
@@ -125,6 +128,7 @@ def check_workspace_cleanup(host: Host):
     out2 = "prototype-sandbox-2 sandbox-runner cleanup-out"
     code, out, calls = host.run("cleanup-workspaces.sh", canned={
         tw: {"stdout": "removed C0123456789-1710000000.000001 reason=age bytes=10\nremaining_bytes=12345\n"},
+        PROBE1: {},
         out1: {"stdout": "cleanup-out: removed 2 entries\n"},
     })
     log = host.log("workspace-cleanup.log")
@@ -139,7 +143,8 @@ def check_workspace_cleanup(host: Host):
 
     code, out, calls = host.run("cleanup-workspaces.sh", canned={
         tw: {"stdout": "removed x\nremaining_bytes=999\n", "stderr": "FAILED to notify x\n", "exit": 3},
-        out1: {"exit": 1, "stderr": "service not running\n"},
+        PROBE1: {"exit": 1, "stderr": "service \"prototype-sandbox-1\" is not running\n"},
+        PROBE2: {},
         out2: {"stdout": "cleanup-out: removed 0 entries\n"},
     })
     log = host.log("workspace-cleanup.log")
@@ -147,7 +152,24 @@ def check_workspace_cleanup(host: Host):
     check("thread-workspace failure exits non-zero", code != 0)
     check("thread-workspace failure logged as FAILED", "FAILED: thread-workspace cleanup" in log, log)
     check("remaining bytes still reported after a notify failure", host.report("thread-workspace-bytes")[1:] == ["999"])
-    check("out cleanup falls back to sandbox 2", ("prototype-sandbox-2", ["sandbox-runner", "cleanup-out"]) in targets, str(targets))
+    check("out cleanup falls back to sandbox 2 when sandbox 1 cannot be exec'd",
+          ("prototype-sandbox-2", ["sandbox-runner", "cleanup-out"]) in targets, str(targets))
+    check("sandbox 1 command not run when exec into it fails",
+          ("prototype-sandbox-1", ["sandbox-runner", "cleanup-out"]) not in targets, str(targets))
+
+    # 進得去第 1 格、但 cleanup-out 自己失敗：那是指令的錯，不換第 2 格重跑。
+    code, out, calls = host.run("cleanup-workspaces.sh", canned={
+        tw: {"stdout": "remaining_bytes=1\n"},
+        PROBE1: {},
+        out1: {"exit": 1, "stderr": "cleanup-out: permission denied\n"},
+        out2: {"stdout": "should not run\n"},
+    })
+    log = host.log("workspace-cleanup.log")
+    targets = [exec_target(c) for c in calls]
+    check("cleanup-out failure inside sandbox 1 exits non-zero", code != 0, log)
+    check("cleanup-out failure inside sandbox 1 logged as FAILED", "FAILED" in log and "cleanup-out" in log, log)
+    check("cleanup-out failure inside sandbox 1 is not retried in sandbox 2",
+          not any(t and t[0] == "prototype-sandbox-2" for t in targets), str(targets))
 
 
 def check_pnpm_prune(host: Host):
@@ -156,15 +178,43 @@ def check_pnpm_prune(host: Host):
         (snapshots / repo).mkdir(parents=True)
         (snapshots / repo / "package.json").write_text(json.dumps({"name": repo, "packageManager": pm}))
     (snapshots / "agent-config").mkdir()
-    code, out, calls = host.run("prune-pnpm-store.sh", canned={"prototype-sandbox-1 corepack": {"stdout": "pruned\n"}},
+    code, out, calls = host.run("prune-pnpm-store.sh", canned={PROBE1: {}, "prototype-sandbox-1 corepack": {"stdout": "pruned\n"}},
                                 extra_env={"SNAPSHOT_ROOT": str(snapshots)})
     log = host.log("pnpm-prune.log")
     targets = [exec_target(c) for c in calls]
+    prunes = [t for t in targets if t and t[1] != ["true"]]
     check("pnpm prune exits 0", code == 0, log)
     check("prunes with every pnpm version the snapshots pin, once each",
-          sorted(t[1] for t in targets if t) == [["corepack", "pnpm@10.12.1", "store", "prune"], ["corepack", "pnpm@9.15.0", "store", "prune"]],
+          sorted(t[1] for t in prunes) == [["corepack", "pnpm@10.12.1", "store", "prune"], ["corepack", "pnpm@9.15.0", "store", "prune"]],
           str(targets))
     check("prune runs in a sandbox, never in the bot", all(t and t[0].startswith("prototype-sandbox-") for t in targets), str(targets))
+
+    # prune 自己失敗：記 FAILED，不換第 2 格重跑。
+    code, out, calls = host.run("prune-pnpm-store.sh", canned={
+        PROBE1: {}, "prototype-sandbox-1 corepack": {"exit": 1}, "prototype-sandbox-2 corepack": {"stdout": "pruned\n"},
+    }, extra_env={"SNAPSHOT_ROOT": str(snapshots)})
+    log = host.log("pnpm-prune.log")
+    targets = [exec_target(c) for c in calls]
+    check("prune failure exits non-zero", code != 0, log)
+    check("prune failure logged as FAILED", "FAILED: pnpm@" in log, log)
+    check("prune failure inside sandbox 1 is not retried in sandbox 2",
+          not any(t and t[0] == "prototype-sandbox-2" for t in targets), str(targets))
+
+    # 第 1 格 exec 不進去：整輪改在第 2 格跑。
+    code, out, calls = host.run("prune-pnpm-store.sh", canned={
+        PROBE1: {"exit": 1}, PROBE2: {}, "prototype-sandbox-2 corepack": {"stdout": "pruned\n"},
+    }, extra_env={"SNAPSHOT_ROOT": str(snapshots)})
+    log = host.log("pnpm-prune.log")
+    targets = [exec_target(c) for c in calls]
+    check("prune falls back to sandbox 2 when sandbox 1 cannot be exec'd", code == 0, log)
+    check("prune runs only in sandbox 2 after the fallback",
+          sorted(t[1] for t in targets if t and t[0] == "prototype-sandbox-2" and t[1] != ["true"]) ==
+          [["corepack", "pnpm@10.12.1", "store", "prune"], ["corepack", "pnpm@9.15.0", "store", "prune"]], str(targets))
+
+    # 兩格都進不去：FAILED。
+    code, out, calls = host.run("prune-pnpm-store.sh", canned={PROBE1: {"exit": 1}, PROBE2: {"exit": 1}},
+                                extra_env={"SNAPSHOT_ROOT": str(snapshots)})
+    check("no reachable sandbox fails the prune", code != 0 and "FAILED" in host.log("pnpm-prune.log"), host.log("pnpm-prune.log"))
 
 
 def check_alerts_wrapper(host: Host):

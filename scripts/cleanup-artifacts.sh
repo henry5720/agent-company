@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # 每小時的 artifact cleanup（bot container 內做，不從 host 直接刪）：
 #
-# 1. drafts 內超過 24 小時的 artifact。`slack-thread-artifact` 上傳失敗時刻意留檔（留著
-#    才有機會被觀察與人工處理），這支排程是唯一會把那些檔案收掉的東西。刪除邏輯不在
-#    這裡：container 內的 `slack-list cleanup` 用 dirfd 逐段走 drafts、不追 symlink；
-#    規則正本在 agent-config，這裡不重寫。
-# 2. CODEX_HOME `sessions/` 底下 mtime 超過 7 天的 rollout（spec #21 §8）。`log/` 與 state
-#    sqlite 不動：find 只從 sessions/ 往下找、只收 `rollout-*.jsonl`。OpenAB session TTL
-#    是 4 小時，7 天前的 rollout 不會再被 session/load。
-# 3. 量 CODEX_HOME 大小寫給 scripts/alerts.py（> 2 GB 告警）。named volume 在 host 上
-#    只有 root 讀得到，所以在 container 內量。
+# 1. drafts 內過期的 artifact（期限是 agent-config `slack-list cleanup` 的規則）。
+#    `slack-thread-artifact` 上傳失敗時刻意留檔（留著才有機會被觀察與人工處理），這支
+#    排程是唯一會把那些檔案收掉的東西。刪除邏輯不在這裡：container 內的
+#    `slack-list cleanup` 用 dirfd 逐段走 drafts、不追 symlink；規則正本在 agent-config，
+#    這裡不重寫。
+# 2. CODEX_HOME `sessions/` 底下 mtime 超過 ROLLOUT_MAX_AGE_MINUTES 的 rollout（spec #21 §8）。
+#    `log/` 與 state sqlite 不動：find 只從 sessions/ 往下找、只收 `rollout-*.jsonl`。
+#    OpenAB session TTL（config/openab.toml）遠短於這個期限，被刪的 rollout 不會再被
+#    session/load。
+# 3. 量 CODEX_HOME 大小寫給 scripts/alerts.py（上限是那裡的 CODEX_HOME_LIMIT_BYTES）。
+#    named volume 在 host 上只有 root 讀得到，所以在 container 內量。
 #
 # 刻意不從 host 直接刪 runtime/drafts —— 那會繞過唯一的清理規則，也會踩到 SELinux label。
 # 一步失敗不跳過後面的步驟；有任何一步失敗就記 FAILED 並回非零，讓 cron 也看得到。
 #
-# 由 scripts/install-sync-cron.sh 寫進 crontab（每小時 :17，見 lib.sh render_crontab）。
+# 由 scripts/install-sync-cron.sh 寫進 crontab；排程時間的正本是 lib.sh 的 `render_crontab`。
 # 手動跑會直接把輸出印在終端機上，cron 跑則寫進 $XDG_STATE_HOME/work-agent/artifact-cleanup.log。
 set -euo pipefail
 

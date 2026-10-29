@@ -152,6 +152,8 @@ def check_rejected_inputs(h):
         ("traversal key", {"workspace": f"../{KEY}/repos/frontend", "argv": ["true"]}),
         ("bad key", {"workspace": "evil-1/repos/frontend", "argv": ["true"]}),
         ("extra segment", {"workspace": f"{KEY}/repos/frontend/src", "argv": ["true"]}),
+        ("trailing newline in repo", {"workspace": f"{KEY}/repos/frontend\n", "argv": ["true"]}),
+        ("trailing newline in key", {"workspace": f"{KEY}\n/repos/frontend", "argv": ["true"]}),
         ("string argv", {"workspace": f"{KEY}/repos/frontend", "argv": "rm -rf /"}),
         ("empty argv", {"workspace": f"{KEY}/repos/frontend", "argv": []}),
         ("huge timeout", {"workspace": f"{KEY}/repos/frontend", "argv": ["true"], "timeout_seconds": 99999}),

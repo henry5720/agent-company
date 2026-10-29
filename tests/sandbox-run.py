@@ -6,8 +6,10 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import io
+import http.client
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -34,14 +36,16 @@ def load():
 
 
 class Response:
-    def __init__(self, payload): self.payload = json.dumps(payload).encode()
+    def __init__(self, payload): self.payload = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
     def read(self): return self.payload
     def __enter__(self): return self
     def __exit__(self, *_): return False
 
 
 class Runner:
-    """假 runner 群。`plan` 依 URL 決定回什麼：dict＝200、int＝HTTP 錯誤、'down'＝連不上。"""
+    """假 runner 群。`plan` 依 URL 決定回什麼：dict＝200、bytes＝200 但 body 照給、int＝HTTP 錯誤、
+    'down'＝連線被拒、'nodns'＝名稱解析失敗（這兩種都還沒送出 request）、
+    'timeout'／'reset'＝request 可能已經到 runner 之後才斷。"""
 
     def __init__(self, plan):
         self.plan, self.requests = plan, []
@@ -51,7 +55,13 @@ class Runner:
         base = request.full_url.rsplit("/", 1)[0]
         reply = self.plan.get(base, "down")
         if reply == "down":
-            raise URLError("connection refused")
+            raise URLError(ConnectionRefusedError(111, "Connection refused"))
+        if reply == "nodns":
+            raise URLError(socket.gaierror(-2, "Name or service not known"))
+        if reply == "timeout":
+            raise TimeoutError("timed out")
+        if reply == "reset":
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
         if isinstance(reply, int):
             raise HTTPError(request.full_url, reply, "err", {}, io.BytesIO(json.dumps({"error": f"mock {reply}"}).encode()))
         return Response(reply)
@@ -113,6 +123,23 @@ def check_slot_selection(cli):
     check("all busy is explained", "busy" in err, err)
 
 
+def check_no_resend_after_send(cli):
+    """request 可能已經到 runner 之後就不能換格重送：同一個 job 會跑兩次（#21 review）。"""
+    first = runner_order(cli)
+    for reply, why in (("timeout", "read timeout"), ("reset", "connection dropped after send"), (b"not json", "invalid JSON reply")):
+        code, _, err, requests = run(cli, [REPO, "--", "true"], {first[0]: reply, first[1]: result()})
+        check(f"{why} exits 3", code == 3, f"code={code} err={err}")
+        check(f"{why} is not resent to the other slot", len(requests) == 1, str(len(requests)))
+        check(f"{why} names the runner", first[0] in err, err)
+    code, _, err, requests = run(cli, [REPO, "--", "true"], {first[0]: "nodns", first[1]: result()})
+    check("unresolvable slot (not sent) falls over", code == 0 and len(requests) == 2, err)
+
+
+def runner_order(cli):
+    _, _, _, requests = run(cli, [REPO, "--", "true"], {"http://slot-a:8080": "down", "http://slot-b:8080": "down"})
+    return [r.full_url.rsplit("/", 1)[0] for r, _ in requests]
+
+
 def check_runner_rejection(cli):
     code, _, err, requests = run(cli, [REPO, "--", "true"], {"http://slot-a:8080": 404, "http://slot-b:8080": 404})
     check("runner 404 is invalid input", code == 2, str(code))
@@ -129,6 +156,8 @@ def check_rejected_inputs(cli):
         ("traversal", [f"/home/node/work/{KEY}/repos/../../../code/x", "--", "true"]),
         ("subdir", [f"{REPO}/frontend", "--", "true"]),
         ("bad key", ["/home/node/work/evil/repos/x", "--", "true"]),
+        ("trailing newline in repo", [REPO + "\n", "--", "true"]),
+        ("trailing newline in key", [f"/home/node/work/{KEY}\n/repos/x", "--", "true"]),
         ("timeout too long", ["--timeout", "99999", REPO, "--", "true"]),
         ("no url option", ["--url", "http://evil", REPO, "--", "true"]),
     ]
@@ -168,6 +197,7 @@ def main():
     check_exit_codes(cli)
     check_slot_selection(cli)
     check_runner_rejection(cli)
+    check_no_resend_after_send(cli)
     check_rejected_inputs(cli)
     check_thread_only(cli)
     if failures:

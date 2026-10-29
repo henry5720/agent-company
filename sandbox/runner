@@ -42,6 +42,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# 跟 bot 端 CLI（agents/bin/）逐字相同，tests/format-patterns.py 比對；一律 fullmatch。
 KEY_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}-[0-9]{10,13}\.[0-9]{1,9}$")
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 DEFAULT_TIMEOUT_SECONDS = 15 * 60
@@ -75,7 +76,7 @@ def parse_workspace(raw: object) -> tuple[str, str]:
     if not isinstance(raw, str):
         raise RequestError(400, "workspace must be '<channel>-<thread_ts>/repos/<repo>'")
     parts = raw.split("/")
-    if len(parts) != 3 or parts[1] != "repos" or not KEY_PATTERN.match(parts[0]) or not REPO_PATTERN.match(parts[2]):
+    if len(parts) != 3 or parts[1] != "repos" or not KEY_PATTERN.fullmatch(parts[0]) or not REPO_PATTERN.fullmatch(parts[2]):
         raise RequestError(400, "workspace must be '<channel>-<thread_ts>/repos/<repo>'")
     return parts[0], parts[2]
 
@@ -456,7 +457,7 @@ def main(argv: list[str] | None = None) -> int:
         print("sandbox-runner: refusing to run as root", file=sys.stderr)
         return 3
     server = make_server(
-        ("0.0.0.0", int(os.environ.get("SANDBOX_RUNNER_PORT", "8080"))),
+        ("0.0.0.0", int(os.environ["SANDBOX_RUNNER_PORT"])),
         work_root=Path(os.environ.get("SANDBOX_WORK_ROOT", "/work")),
         out_root=Path(os.environ.get("SANDBOX_OUT_ROOT", "/out")),
         scratch_root=Path(os.environ.get("SANDBOX_SCRATCH_ROOT", "/home/node/scratch")),

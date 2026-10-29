@@ -6,9 +6,10 @@
 # sandbox 經 corepack 依各 repo 的 packageManager 取 pnpm，所以這裡從 snapshot root 的
 # 各 repo package.json 收集實際用到的 pnpm 版本，每個版本各 prune 一次。
 #
-# prune 只刪沒被任何 project 引用的 package；排在週日清晨，避開 PM 正在 install 的時段。
-# 由 install-sync-cron.sh 寫進 crontab（週日 04:37）；輸出寫進
+# prune 只刪沒被任何 project 引用的 package；排在週末清晨，避開 PM 正在 install 的時段。
+# 排程時間的正本是 scripts/lib.sh 的 `render_crontab`；輸出寫進
 # $XDG_STATE_HOME/work-agent/pnpm-prune.log。
+# 第 1 格 exec 不進去才整輪改在第 2 格跑（lib.sh `live_sandbox`）；prune 本身失敗不換格重跑。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -38,10 +39,11 @@ if ((${#versions[@]} == 0)); then
   exit 0
 fi
 
-in_sandbox() {
-  docker compose -f "$ROOT/compose.yaml" exec -T -w /home/node prototype-sandbox-1 "$@" ||
-    docker compose -f "$ROOT/compose.yaml" exec -T -w /home/node prototype-sandbox-2 "$@"
-}
+if ! sandbox=$(live_sandbox "$ROOT"); then
+  printf 'FAILED: cannot exec into either sandbox; pnpm store was not pruned.\n'
+  exit 1
+fi
+in_sandbox() { docker compose -f "$ROOT/compose.yaml" exec -T -w /home/node "$sandbox" "$@"; }
 
 status=0
 for version in "${versions[@]}"; do

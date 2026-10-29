@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 每小時的 host 告警（spec #21 §8）。判斷邏輯在 scripts/alerts.py；這支只負責排程、
-# log 與鎖。由 install-sync-cron.sh 寫進 crontab（每小時 :47，排在兩個清理之後，讀到的
+# log 與鎖。排程時間的正本是 scripts/lib.sh 的 `render_crontab`（排在兩個清理之後，讀到的
 # 是這一小時剛回報的大小）。cron 跑時輸出寫進 $XDG_STATE_HOME/work-agent/alerts.log。
 #
 # 需要 deployment host 上兩樣東西（docs/runbook.md「告警」）：

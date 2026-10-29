@@ -31,6 +31,8 @@ COPY --chmod=0755 sandbox-attachment /usr/local/bin/sandbox-attachment
 # 先建好目錄讓新 volume 繼承 node 的 ownership。
 RUN install -d -o node -g node /home/node/scratch /home/node/.pnpm-store /home/node/.cache
 
+# SANDBOX_RUNNER_PORT 要等於 config/host-network.env 的 WORK_AGENT_RUNNER_PORT（Dockerfile
+# 讀不到那份檔案，tests/static.sh 比對）；EXPOSE 與 compose 的 healthcheck 都讀這個 env。
 # SANDBOX_SWEEP_ALL=1：這個 container 只有 runner 和它的 job，job 結束時連逃出
 # session 的 process 一起收掉。
 # GOMEMLIMIT：前端 vite.config 設 optimizeDeps.force，每次起 dev server 都重新預打包；
@@ -49,5 +51,5 @@ ENV SANDBOX_SWEEP_ALL=1 \
 
 USER node
 WORKDIR /home/node
-EXPOSE 8080
+EXPOSE ${SANDBOX_RUNNER_PORT}
 CMD ["sandbox-runner"]

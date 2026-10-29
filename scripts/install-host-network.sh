@@ -30,16 +30,10 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ETC=/etc/work-agent
 
-die() { printf 'install-host-network: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=scripts/lib.sh
+source "$ROOT/scripts/lib.sh"
 
-# 只讀指定的 key，不 source（env 檔可能含其他 secret，也可能含 shell 字元）。
-read_env_value() {
-  local file=$1 want=$2 key value
-  while IFS='=' read -r key value; do
-    [[ $key == "$want" ]] && { printf '%s' "$value"; return 0; }
-  done < "$file"
-  return 1
-}
+die() { printf 'install-host-network: %s\n' "$*" >&2; exit 1; }
 
 gateway_env() {
   local src=$1 base key origin prefix
