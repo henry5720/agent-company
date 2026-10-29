@@ -197,6 +197,55 @@ assert not any('docker.sock' in m for m in mounts) and not bot.get('privileged')
 assert bot['networks'] == {host_net['WORK_AGENT_NETWORK']: {'ipv4_address': host_net['WORK_AGENT_BOT_IP']}}, \
     'bot must hold the one IP the firewall lets reach the proxy'
 assert doc['networks'][host_net['WORK_AGENT_NETWORK']] == {'external': True}
+
+# spec #21 §2、§5：bot 寫 thread workspace、唯讀讀 sandbox 產物；working_dir 仍是唯讀 snapshot。
+assert './runtime/work:/home/node/work:z' in mounts, 'the bot writes thread workspaces'
+assert './runtime/out:/home/node/out:ro,z' in mounts, 'the bot only reads sandbox output'
+assert sum(m.split(':')[1] in ('/home/node/work', '/home/node/out') for m in mounts) == 2, mounts
+for helper in ('thread-workspace', 'sandbox-run'):
+    assert f'COPY agents/bin/{helper} /usr/local/bin/{helper}' in dockerfile, f'bot image must ship {helper}'
+    assert f'chmod 0755 /usr/local/bin/{helper}' in dockerfile and f'chown root:root /usr/local/bin/{helper}' in dockerfile, helper
+
+# spec #21 §6、§8：2 格 prototype sandbox。
+sandboxes = {name: svc for name, svc in doc['services'].items() if 'sandbox' in name}
+assert sorted(sandboxes) == ['prototype-sandbox-1', 'prototype-sandbox-2'], \
+    'agents/bin/sandbox-run defaults to http://prototype-sandbox-{1,2}:<runner port>'
+runner_defaults = re.search(r'^DEFAULT_RUNNER_URLS = "([^"]+)"', (root / 'agents/bin/sandbox-run').read_text(), re.M).group(1).split()
+assert runner_defaults == [f"http://{name}:{host_net['WORK_AGENT_RUNNER_PORT']}" for name in sorted(sandboxes)], runner_defaults
+SANDBOX_TAG = f"work-agent-sandbox:node{versions['SANDBOX_NODE_IMAGE'].split('@')[0].split(':')[1]}-playwright{versions['PLAYWRIGHT_VERSION']}"
+scratch_volumes = set()
+for name, svc in sandboxes.items():
+    assert svc['build'] == {'context': './sandbox', 'args': {
+        'SANDBOX_NODE_IMAGE': versions['SANDBOX_NODE_IMAGE'],
+        'PLAYWRIGHT_VERSION': versions['PLAYWRIGHT_VERSION'],
+        'OFFICEPARSER_VERSION': versions['OFFICEPARSER_VERSION'],
+    }}, f'{name} build args must equal config/versions.env'
+    assert svc['image'] == SANDBOX_TAG, f'{name} image tag must name the pinned versions'
+    assert not svc.get('privileged'), f'{name} must not be privileged'
+    assert 'env_file' not in svc, f'{name} must not load env/openab.env (Slack tokens live there)'
+    senv = svc.get('environment') or {}
+    senv_keys = list(senv) if isinstance(senv, dict) else [e.split('=', 1)[0] for e in senv]
+    assert not any(k.startswith(('SLACK_', 'COMPANY_', 'R2_', 'STT_')) or 'TOKEN' in k or 'KEY' in k for k in senv_keys), \
+        f'{name} must not carry any token: {senv_keys}'
+    smounts = svc['volumes']
+    assert not any('docker.sock' in m for m in smounts), f'{name} must not mount the Docker socket'
+    assert './runtime/work:/work:ro,z' in smounts, f'{name} must mount the whole thread workspace root read-only'
+    assert './runtime/out:/out:z' in smounts, f'{name} writes only to out'
+    assert not any('SNAPSHOT_ROOT' in m or m.split(':')[0].startswith(('./config', './agents', './env', './runtime/openab', './runtime/drafts')) for m in smounts), smounts
+    host_paths = [m.split(':')[0] for m in smounts if m.startswith(('.', '/', '$', '~'))]
+    assert host_paths == ['./runtime/work', './runtime/out'], f'{name} binds only work (ro) and out: {host_paths}'
+    assert 'pnpm-store:/home/node/.pnpm-store' in smounts, 'both sandboxes share one pnpm store'
+    scratch = [m for m in smounts if m.endswith(':/home/node/scratch')]
+    assert len(scratch) == 1, f'{name} needs its own scratch volume (node_modules live there)'
+    scratch_volumes.add(scratch[0].split(':')[0])
+    # spec #21 §8（#26：4g 起 dev server 被 OOM kill，維護者定 5g）
+    assert svc['mem_limit'] == '5g' and svc['memswap_limit'] == '5g', f'{name} memory must be 5g without swap'
+    assert float(svc['cpus']) == 2.0 and svc['pids_limit'] == 1024, name
+    assert svc['networks'] == [host_net['WORK_AGENT_NETWORK']], f'{name} joins work-agent-net with a dynamic IP (never .1 or .10)'
+    assert svc['dns'] == host_net['WORK_AGENT_SANDBOX_DNS'].split(','), f'{name} must use the public resolvers'
+assert len(scratch_volumes) == 2 and all(v in doc['volumes'] for v in scratch_volumes), \
+    'each sandbox keeps its scratch and node_modules in its own named volume'
+assert 'pnpm-store' in doc['volumes']
 PY
 
 grep -Fq 'allow_all_users = true' "$ROOT/config/openab.toml"

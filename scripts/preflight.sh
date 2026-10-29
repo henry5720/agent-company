@@ -78,6 +78,12 @@ docker network inspect work-agent-net >/dev/null 2>&1 ||
 # The container runs as HOST_UID:HOST_GID (see Dockerfile), so the writable
 # bind mounts must belong to that identity.
 [[ $(stat -c '%u:%g' "$STATE_DIR") == "$HOST_UID:$HOST_GID" ]] || fail "$STATE_DIR must be owned by $HOST_UID:$HOST_GID"
+# thread workspace（bot 寫）與 sandbox out（sandbox 以 node 寫、bot 唯讀）。不存在時 Docker 會
+# 自己建成 root 擁有，兩邊都寫不進去，所以這裡先擋。
+for dir in "$ROOT/runtime/work" "$ROOT/runtime/out"; do
+  [[ -d $dir ]] || fail "missing $dir (mkdir -p it as $HOST_UID:$HOST_GID before compose up)"
+  [[ $(stat -c '%u:%g' "$dir") == "$HOST_UID:$HOST_GID" ]] || fail "$dir must be owned by $HOST_UID:$HOST_GID"
+done
 [[ $(stat -c '%u:%g' "$DRAFT_DIR") == "$HOST_UID:$HOST_GID" ]] || fail "$DRAFT_DIR must be owned by $HOST_UID:$HOST_GID"
 [[ $(id -u) == "$HOST_UID" ]] || fail "HOST_UID=$HOST_UID does not match the user running docker ($(id -u))"
 

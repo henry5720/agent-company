@@ -51,16 +51,23 @@ RUN set -eu; \
 # root 擁有、0755：agent 可以執行，不能改寫（rootfs 本來就是唯讀的，這是第二層）。
 COPY agents/bin/company-image /usr/local/bin/company-image
 COPY agents/bin/slack-thread-artifact /usr/local/bin/slack-thread-artifact
+# thread workspace 由 helper 建、路徑不給 LLM 拼；repo 的 code 只經 sandbox-run 交給 sandbox 跑（spec #21 §5、§6）。
+COPY agents/bin/thread-workspace /usr/local/bin/thread-workspace
+COPY agents/bin/sandbox-run /usr/local/bin/sandbox-run
 RUN chmod 0755 /usr/local/bin/company-image \
     && chown root:root /usr/local/bin/company-image \
     && chmod 0755 /usr/local/bin/slack-thread-artifact \
     && chown root:root /usr/local/bin/slack-thread-artifact \
+    && chmod 0755 /usr/local/bin/thread-workspace \
+    && chown root:root /usr/local/bin/thread-workspace \
+    && chmod 0755 /usr/local/bin/sandbox-run \
+    && chown root:root /usr/local/bin/sandbox-run \
     && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
 
 # CODEX_HOME（/home/node/.codex）是 named volume；空 volume 會沿用 mount point 在 image 內的
 # ownership，所以先建好讓下面的 chown -R 接手，否則 fresh volume 是 root:root、codex 寫不進去。
-# /home/node/.agents 是 skills 唯讀 mount 的父目錄。
-RUN mkdir -p /home/node/.codex /home/node/.agents
+# /home/node/.agents 是 skills 唯讀 mount 的父目錄；work／out 是 bind mount 的 mount point。
+RUN mkdir -p /home/node/.codex /home/node/.agents /home/node/work /home/node/out
 
 RUN if [ "$HOST_GID" != "1000" ]; then groupmod -g "$HOST_GID" node; fi \
     && if [ "$HOST_UID" != "1000" ]; then usermod -u "$HOST_UID" -g "$HOST_GID" node; fi \
@@ -68,4 +75,5 @@ RUN if [ "$HOST_GID" != "1000" ]; then groupmod -g "$HOST_GID" node; fi \
 USER node
 RUN company-image --help >/dev/null \
     && slack-thread-artifact --help >/dev/null \
+    && command -v thread-workspace && command -v sandbox-run \
     && ! command -v gh && ! command -v opencode && ! command -v claude

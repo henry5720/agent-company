@@ -57,6 +57,10 @@ services:
       - ./config/codex/catalog.json:/etc/codex/catalog.json:ro,z
       - ./runtime/openab:/home/node/.openab:z
       - ./runtime/drafts:/home/node/drafts:z
+      # thread workspace（spec #21 §5）：只有 bot 寫，由 thread-workspace 建。sandbox 唯讀掛同一個目錄。
+      - ./runtime/work:/home/node/work:z
+      # sandbox 的產物（截圖、附件轉換結果）。bot 只讀；清理由 sandbox 那邊做。
+      - ./runtime/out:/home/node/out:ro,z
       # One mount for the whole snapshot root: adding a repo only touches
       # config/repos.conf. Skills come from the agent-config snapshot, read-only:
       # 可寫的 skill 目錄會讓被 injection 的 thread 植入跨 PM 持續的 skill。
@@ -67,6 +71,60 @@ services:
       # which keeps repo source read-only and adding a repo free of Compose edits.
       - ${SNAPSHOT_ROOT:?set SNAPSHOT_ROOT in .env}/.index:/home/node/code/.index:z
 
+  # prototype sandbox ×2（spec #21 §6）：repo 的 install、dev server、截圖、附件轉換在這裡跑，
+  # bot 只經 `sandbox-run` 打 runner port（agents/bin/sandbox-run 的 DEFAULT_RUNNER_URLS 用 service 名）。
+  # 邊界：沒有 env_file、沒有任何 token、不掛 Docker socket、不 privileged；thread workspace 唯讀，
+  # 只寫 runtime/out。sandbox 若能寫 bot 看得到的 code 就能種 .git/hooks，所以 work 一定 :ro。
+  prototype-sandbox-1: &prototype-sandbox
+    build:
+      context: ./sandbox
+      args:
+        SANDBOX_NODE_IMAGE: node:22.16.0-bookworm@sha256:71bcbb3b215b3fa84b5b167585675072f4c270855e37a599803f1a58141a0716
+        PLAYWRIGHT_VERSION: 1.64.0
+        OFFICEPARSER_VERSION: 8.3.0
+    # 兩格同一個 image；tag 帶 node 與 Playwright 版本，升級時不會蓋掉舊的。
+    image: work-agent-sandbox:node22.16.0-bookworm-playwright1.64.0
+    container_name: work-agent-sandbox-1
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # spec #21 §8：每格 5g、不用 swap（#26 實測 4g 起 dev server 時 esbuild 預打包被 OOM kill）。
+    mem_limit: 5g
+    memswap_limit: 5g
+    cpus: 2.0
+    pids_limit: 1024
+    stop_grace_period: 10s
+    # 不給固定 IP：Docker 從 10.231.0.128/25 動態配，碰不到 gateway（.1）與 bot（.10）。
+    # 防火牆把 bot 以外的位址一律當 sandbox（config/host-network.env）。
+    networks:
+      - work-agent-net
+    # sandbox 連不到 VPC resolver，改用公開 resolver（config/host-network.env 的 WORK_AGENT_SANDBOX_DNS）。
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./runtime/work:/work:ro,z
+      - ./runtime/out:/out:z
+      # 兩格共用 pnpm store；每格自己的 scratch（原始碼副本與 node_modules），換 thread 時 runner 清空。
+      - pnpm-store:/home/node/.pnpm-store
+      - prototype-sandbox-1-scratch:/home/node/scratch
+
+  prototype-sandbox-2:
+    <<: *prototype-sandbox
+    container_name: work-agent-sandbox-2
+    volumes:
+      - ./runtime/work:/work:ro,z
+      - ./runtime/out:/out:z
+      - pnpm-store:/home/node/.pnpm-store
+      - prototype-sandbox-2-scratch:/home/node/scratch
+
 # 由 scripts/install-host-network.sh 建立；external 讓 `docker compose down` 不會拿掉它。
 networks:
   work-agent-net:
@@ -76,3 +134,6 @@ networks:
 # 不宣告就不會被 `docker compose down -v` 刪掉，回滾時舊 image 仍接得上。觀察期結束才刪（#36）。
 volumes:
   codex-home:
+  pnpm-store:
+  prototype-sandbox-1-scratch:
+  prototype-sandbox-2-scratch:
