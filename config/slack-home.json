@@ -66,7 +66,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*可查閱的專案*\n以下是最近一次同步的版本，不一定等於 GitHub 最新狀態。\n• `agent-config` — 共用 agent skills 與 MCP 設定\n• `work-docs` — 專案與 API 等產品文件\n• `teamsync-frontend` — TeamSync React 網頁前端\n• `teamsync-backend` — TeamSync 多租戶協作與 AI 平台的 FastAPI 後端\n• `E-commerce-backend` — FastAPI 後端範本（OAuth2/JWT、Docker、MySQL）；沒有已確認的電商產品用途\n• `spc-backend` — FastAPI 後端範本（MySQL、Redis、MinIO、JWT）；沒有已確認的 SPC 產品用途\n• `teamsync-tutorials` — 給客戶看的 TeamSync 操作教學\n• `teamsync-app` — TeamSync Expo iOS／Android 聊天 app，也支援 Web"
+        "text": "*可查閱的專案*\n以下是最近一次同步的版本，不一定等於 GitHub 最新狀態。\n• `agent-config` — 共用 agent skills 與 MCP 設定\n• `work-docs` — 專案與 API 等產品文件\n• `teamsync-frontend` — TeamSync React 網頁前端\n• `teamsync-backend` — TeamSync 多租戶協作與 AI 平台的 FastAPI 後端\n• `E-commerce-backend` — FastAPI 後端範本（OAuth2/JWT、Docker、MySQL）；沒有已確認的電商產品用途\n• `spc-backend` — FastAPI 後端範本（MySQL、Redis、MinIO、JWT）；沒有已確認的 SPC 產品用途\n• `teamsync-tutorials` — 給客戶看的 TeamSync 操作教學\n• `teamsync-app` — TeamSync Expo iOS／Android 聊天 app，也支援 Web\n• `RPA-Block` — C++ 桌面 RPA 編輯器，支援積木式流程、OCR 與 REST API"
       }
     },
     {
