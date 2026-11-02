@@ -68,6 +68,7 @@ assert agent_env == {
     'CODEX_HOME': '/home/node/.codex',
     'CODEX_PATH': CODEX_PATH,
     'INITIAL_AGENT_MODE': 'agent-full-access',
+    'CODEX_INTERNAL_ORIGINATOR_OVERRIDE': 'codex_exec',
 }, agent_env
 
 dockerfile = (root / 'Dockerfile').read_text()

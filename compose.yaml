@@ -25,8 +25,8 @@ services:
       dockerfile: Dockerfile
       args:
         OPENAB_IMAGE: ghcr.io/openabdev/openab:0.10.0-beta.3-codex@sha256:b1a47eaeddb99cffef4ce50f3791cee9830043ef3a573c598a559ac913dff7e8
-        CODEX_VERSION: 0.159.0
-        CODEX_ACP_VERSION: 2.0.0
+        CODEX_VERSION: 0.166.0
+        CODEX_ACP_VERSION: 2.5.0
         CODEGRAPH_VERSION: 1.5.0
         SKILLSHARE_VERSION: 0.25.12
         PLAYWRIGHT_CLI_VERSION: 0.1.22
@@ -50,9 +50,12 @@ services:
     cap_drop:
       - ALL
     # agent 會在這裡 install、跑 dev server；上限讓它跑爆時只殺自己，不拖垮 host。
+    # pids 算的是 thread：每個 Slack session 帶一組 codex app-server 與 MCP（codegraph、chrome-devtools），
+    # 約 100 條。1024 在 9 個 session 時用完，第 10 個開不了 thread、回 JSON-RPC -32603。
+    # 4096 = max_sessions（config/openab.toml）× ~110，再留給 install、dev server。
     cpus: 6.0
     mem_limit: 8g
-    pids_limit: 1024
+    pids_limit: 4096
     stop_grace_period: 30s
     # `z` relabels bind mounts for SELinux hosts and is a no-op elsewhere.
     volumes:

@@ -18,11 +18,14 @@ streaming = false
 # - CODEX_PATH：image 內釘版的 codex（config/versions.env 的 CODEX_VERSION）。
 # - agent-full-access：OpenAB 官方對 container 部署的建議（docs/codex.md）。container 內 bwrap
 #   建不了 namespace，其他 mode 的 shell 不是失敗就是每條都要人按允許；邊界是 container 本身。
+# - CODEX_INTERNAL_ORIGINATOR_OVERRIDE：app-server 預設拿 ACP client 名稱（openab）當 originator，
+#   公司 gateway 背後的 ChatGPT 帳號對非 Codex originator 會不定期回 gpt-6.1-sol model_not_found。
+#   理由與實測見 docs/adr/0013-send-a-codex-originator-to-the-gateway.md。
 # working_dir 照官方用 home；snapshot 在 /home/node/snapshots。
 [agent]
 command = "codex-acp"
 working_dir = "/home/node"
-env = { CODEX_HOME = "/home/node/.codex", CODEX_PATH = "/opt/codex-0.159.0/node_modules/.bin/codex", INITIAL_AGENT_MODE = "agent-full-access" }
+env = { CODEX_HOME = "/home/node/.codex", CODEX_PATH = "/opt/codex-0.166.0/node_modules/.bin/codex", INITIAL_AGENT_MODE = "agent-full-access", CODEX_INTERNAL_ORIGINATOR_OVERRIDE = "codex_exec" }
 inherit_env = [
   "COMPANY_GATEWAY_API_KEY",
   "COMPANY_GATEWAY_BASE_URL",

@@ -3,8 +3,8 @@
 # Codex 的 provider 設定不讀 env，所以 gateway 位址只能這樣填進去；key 照常走 env_key。
 model_provider = "company"
 model = "gpt-6.1-sol"
-# 只放 gpt-6.1-sol 一筆，消掉每輪回覆開頭的 model metadata warning。內容是該版 codex
-# `codex-rs/models-manager/models.json` 的 gpt-6-sol 那筆、只改 slug；升級 codex 時要重產，
+# 只放 gpt-6.1-sol 一筆，消掉每輪回覆開頭的 model metadata warning。內容原樣取自該版 codex
+# `codex-rs/models-manager/models.json` 的 gpt-6.1-sol 那筆；升級 codex 時要重產，
 # parse 失敗 codex 整個起不來。
 model_catalog_json = "/etc/codex/catalog.json"
 
@@ -14,3 +14,8 @@ name = "Company Gateway"
 base_url = "${COMPANY_GATEWAY_BASE_URL}"
 wire_api = "responses"
 env_key = "COMPANY_GATEWAY_API_KEY"
+# 跟維護者機器的 codex-lb provider 一致：websocket 一樣連這個 base_url，不經 gateway 的 HTTP bridge
+# （HTTP 會撞到 bridge_instance_mismatch）；gateway 背後輪替帳號時，串流中斷多重試幾次。
+supports_websockets = true
+request_max_retries = 4
+stream_max_retries = 10
