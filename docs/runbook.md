@@ -285,7 +285,7 @@ tail -n 50 "${XDG_STATE_HOME:-$HOME/.local/state}/agent-company/artifact-cleanup
 
 `cleanup-artifacts.sh` 自己不刪檔，它在 container 內執行 `/home/node/snapshots/agent-config/skills/slack-list/scripts/slack-list cleanup`——刪除規則的正本在 agent-config。drafts 在 home volume 裡，host 不要繞過這支去刪。log 裡出現 `FAILED` 就是那一輪沒清到（多半是 container 沒在跑），artifact 會留到下一輪；持續 FAILED 要當成待處理，不是雜訊。
 
-`update-snapshots.sh` 同步完會用 runtime image 重建 CodeGraph 索引，所以 host 不需要安裝 Node。索引放在 `$SNAPSHOT_ROOT/.index/<repo>`，每個 snapshot 內的 `.codegraph` 是指過去的相對 symlink。image 還沒 build 時那一輪的索引會被跳過並印出訊息，`deploy.sh` 之後再跑一次同步即可。
+`update-snapshots.sh` 同步完會用 runtime image 重建 CodeGraph 索引，所以 host 不需要安裝 Node。索引放在 `$SNAPSHOT_ROOT/.index/<repo>`，每個 snapshot 內的 `.codegraph-company` 是指過去的相對 symlink。索引容器與 agent 都設定 `CODEGRAPH_DIR=.codegraph-company`，保留 repo 原有的 `.codegraph` 檔案。image 還沒 build 時那一輪的索引會被跳過並印出訊息，`deploy.sh` 之後再跑一次同步即可。image 已存在但索引失敗時，同步會回非零狀態，不會宣稱同步成功。
 
 查看 home 用了多少空間（home 沒有自動清理，clone 與套件快取會累積）：
 

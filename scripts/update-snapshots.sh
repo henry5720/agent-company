@@ -2,6 +2,9 @@
 set -euo pipefail
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/lib.sh
+source "$REPO_DIR/scripts/lib.sh"
+load_env "$REPO_DIR"
 ROOT=${SNAPSHOT_ROOT:-${HOME:?HOME must be set}/agent-company-snapshots}
 INDEX_ROOT=$ROOT/.index
 CONFIG=${REPOS_CONFIG:-$REPO_DIR/config/repos.conf}
@@ -58,16 +61,12 @@ while IFS='|' read -r name url branch; do
   git -C "$target" reset --hard "origin/$branch"
   git -C "$target" clean -ffd
 
-  # The CodeGraph index must be writable, but the snapshot is mounted read-only.
-  # A relative symlink into $INDEX_ROOT keeps the index outside the read-only
-  # tree while leaving it where CodeGraph expects it. Excluding it here (not via
-  # a host-wide gitignore) keeps `clean -ffd` and `status --porcelain` correct
-  # regardless of the host's dotfiles. The pattern has no trailing slash because
-  # Git sees a symlink, not a directory.
+  # Keep repo-owned .codegraph files intact. Both the indexer and the agent use
+  # CODEGRAPH_DIR=.codegraph-company; only its external index target is writable.
   mkdir -p "$INDEX_ROOT/$name" "$target/.git/info"
-  [[ -L "$target/.codegraph" ]] || ln -sfn "../.index/$name" "$target/.codegraph"
-  grep -qxF '.codegraph' "$target/.git/info/exclude" 2>/dev/null \
-    || printf '.codegraph\n' >> "$target/.git/info/exclude"
+  ln -sfnT "../.index/$name" "$target/.codegraph-company"
+  grep -qxF '.codegraph-company' "$target/.git/info/exclude" 2>/dev/null \
+    || printf '.codegraph-company\n' >> "$target/.git/info/exclude"
 
   indexed+=("$name")
   printf '%-20s %s %s\n' "$name" "$branch" "$(git -C "$target" rev-parse --short HEAD)"
@@ -76,7 +75,7 @@ done < "$CONFIG"
 # Build the indexes with the runtime image so the host needs no Node toolchain.
 # Before the first `deploy.sh` the image does not exist yet; that is not fatal.
 if [[ ${#indexed[@]} -gt 0 ]]; then
-  script=""
+  script="set -e; "
   for name in "${indexed[@]}"; do
     script+="if [ -s /home/node/snapshots/.index/$name/codegraph.db ];"
     script+=" then codegraph sync /home/node/snapshots/$name;"
@@ -84,14 +83,21 @@ if [[ ${#indexed[@]} -gt 0 ]]; then
   done
   # Plain `docker run` with no network instead of `docker compose run`: indexing needs no
   # network or home volume, only the bot's snapshot and .index mounts mirrored here.
-  image=$(SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" config --images agent)
+  # config --images agent also includes dependency images on some Compose versions.
+  image=$(SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" config --format json |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["agent"]["image"])')
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    printf 'CodeGraph index skipped (runtime image not built yet)\n' >&2
+    exit 0
+  fi
   if docker run --rm --network none --read-only --tmpfs /tmp \
-      --cap-drop ALL --security-opt no-new-privileges:true -e CODEGRAPH_TELEMETRY=0 \
+      --cap-drop ALL --security-opt no-new-privileges:true -e CODEGRAPH_TELEMETRY=0 -e CODEGRAPH_DIR=.codegraph-company \
       -v "$ROOT:/home/node/snapshots:ro,z" -v "$INDEX_ROOT:/home/node/snapshots/.index:z" \
       --entrypoint sh "$image" -c "$script"; then
     printf 'CodeGraph index updated for %d repos\n' "${#indexed[@]}"
   else
-    printf 'CodeGraph index skipped (runtime image not built yet?)\n' >&2
+    printf 'FAILED: CodeGraph index update\n' >&2
+    exit 1
   fi
 fi
 

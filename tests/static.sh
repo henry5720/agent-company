@@ -141,7 +141,8 @@ assert run_loader({'CODEX_VERSION': 'latest'}).returncode != 0, 'a floating vers
 assert deploy.index('render_codex_config') < deploy.index('compose up')
 
 snapshot_updater = (root / 'scripts/update-snapshots.sh').read_text()
-assert 'SNAPSHOT_ROOT="$ROOT" docker compose -f "$REPO_DIR/compose.yaml" config --images agent' in snapshot_updater
+assert 'config --format json' in snapshot_updater
+assert 'CODEGRAPH_DIR=.codegraph-company' in snapshot_updater
 # 索引用不連網、不掛 home 的 docker run，mount 對齊 bot 的 snapshot 與 .index。
 assert '-v "$ROOT:/home/node/snapshots:ro,z" -v "$INDEX_ROOT:/home/node/snapshots/.index:z"' in snapshot_updater
 assert 'docker compose -f "$REPO_DIR/compose.yaml" run' not in snapshot_updater
@@ -284,6 +285,7 @@ fi
 "$ROOT/tests/image-runtime.py"
 "$ROOT/tests/slack-thread-artifact.py"
 "$ROOT/tests/artifact-path-safety.py"
+python3 "$ROOT/tests/snapshot-sync.py"
 
 if ((${#LIMITED[@]})); then
   printf 'LIMITED VERIFICATION\n'

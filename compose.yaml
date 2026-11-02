@@ -45,6 +45,8 @@ services:
         required: false
     environment:
       CODEGRAPH_TELEMETRY: "0"
+      # Preserve repo-owned .codegraph files; host sync creates this index symlink.
+      CODEGRAPH_DIR: .codegraph-company
     security_opt:
       - no-new-privileges:true
     cap_drop:
