@@ -198,7 +198,15 @@ assert not bot.get('privileged')
 
 # Chrome sidecar: pinned by digest, shares the bot's localhost, holds no secrets.
 chrome = doc['services']['chrome']
-assert chrome['image'] == versions['CHROME_IMAGE'] and '@sha256:' in chrome['image']
+assert chrome['build']['args'] == {
+    'CHROME_IMAGE': versions['CHROME_IMAGE'],
+    'FONTS_NOTO_CJK_VERSION': versions['FONTS_NOTO_CJK_VERSION'],
+}, 'chrome build args must equal config/versions.env'
+assert '@sha256:' in versions['CHROME_IMAGE']
+# The local layer only adds CJK fonts on top of the pinned headless-shell (ADR 0014).
+chrome_dockerfile = (root / 'chrome/Dockerfile').read_text()
+assert 'FROM ${CHROME_IMAGE}' in chrome_dockerfile
+assert '"fonts-noto-cjk=${FONTS_NOTO_CJK_VERSION}"' in chrome_dockerfile
 # Both join a network-only holder (k8s pause): joining agent's own network would strand Chrome
 # in a dead namespace whenever agent restarts.
 assert doc['services']['net']['image'] == versions['PAUSE_IMAGE'] and '@sha256:' in versions['PAUSE_IMAGE']

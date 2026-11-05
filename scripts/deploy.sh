@@ -60,6 +60,8 @@ compose exec -T agent sh -lc \
 # The chrome sidecar shares the bot's localhost: the same --browser-url the maintainer uses.
 compose exec -T agent sh -lc "playwright-cli --version >/dev/null"
 compose exec -T agent curl -fsS --retry 10 --retry-connrefused --retry-delay 1 --max-time 30 http://127.0.0.1:9222/json/version >/dev/null
+# Chinese pages render with real glyphs only if the sidecar layer installed the CJK fonts.
+compose exec -T chrome test -e /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 
 # 生圖與上傳：只驗它們在、可執行、不可寫。這裡不對 gateway 或 Slack 發任何請求。
 compose exec -T agent sh -lc \

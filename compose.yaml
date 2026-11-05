@@ -29,7 +29,7 @@ services:
         CODEX_ACP_VERSION: 2.5.0
         CODEGRAPH_VERSION: 1.5.0
         SKILLSHARE_VERSION: 0.25.12
-        PLAYWRIGHT_CLI_VERSION: 0.1.22
+        PLAYWRIGHT_CLI_VERSION: 0.1.23
         SKILLSHARE_LINUX_AMD64_SHA256: 4a9674711bfd6acc360fc61af52c8b729693ccb75032160b53d8a018c051e800
         SKILLSHARE_LINUX_ARM64_SHA256: 2af03f7cff56548ffadfd5fbc3bd407139bf73248cff5a2769d48e52647a1442
         HOST_UID: ${HOST_UID:-1000}
@@ -83,9 +83,14 @@ services:
   # headless Chrome sidecar。透過 `net` 跟 agent 共用 localhost：agent 連 127.0.0.1:9222
   # 就是它（跟維護者機器的 chrome-devtools MCP 同一個 --browser-url），它也開得到 agent 跑起來的
   # dev server。沒有 token、沒有 volume。entrypoint 直接跑 Chrome、只聽 127.0.0.1，不用 image
-  # 自帶那個聽所有介面的 socat。
+  # 自帶那個聽所有介面的 socat。image 是 headless-shell 加中文字型（chrome/Dockerfile，ADR 0014）。
   chrome:
-    image: chromedp/headless-shell:157.0.8103.27@sha256:7bee201478b2f6266aae01243740ee85c16281e32f42d3aed9fdf04f4eace7a1
+    build:
+      context: chrome
+      args:
+        CHROME_IMAGE: chromedp/headless-shell:157.0.8103.27@sha256:7bee201478b2f6266aae01243740ee85c16281e32f42d3aed9fdf04f4eace7a1
+        FONTS_NOTO_CJK_VERSION: 1:20240730+repack1-1
+    image: agent-company-chrome:157.0.8103.27
     network_mode: service:net
     depends_on:
       - net
