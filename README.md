@@ -4,6 +4,14 @@
 
 形狀照 OpenAB 官方的 Codex 部署：一個 container、可寫的 home、直連公司 gateway。理由見 [ADR 0012](docs/adr/0012-follow-the-official-openab-codex-deployment.md)。
 
+```mermaid
+flowchart LR
+  Q[Slack 提問] --> A[查程式碼、文件與待辦]
+  A --> R[說明、圖解或檔案回原 thread]
+```
+
+同事使用方式、提問範例與 skills 教學入口見[使用指南](docs/bot-guide.md)。
+
 ## 架構
 
 ```text

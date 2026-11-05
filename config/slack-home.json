@@ -13,7 +13,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*把 Slack 待辦、PM 留言和程式碼接起來的工作助理*\n用白話回答問題、整理待辦，也能動手改 code，把改好的 patch、截圖或檔案傳回這個對話串。"
+        "text": "*在 Slack 裡使用 coding agent*\n背後由 Codex 執行，可以讀寫檔案、執行指令、使用工具與 skills，協助你分析、製作與驗證。直接描述目標，不用先知道該用哪個工具。\n\n描述目標 → Codex 使用程式碼、文件與工具 → 結果回同一串"
       }
     },
     {
@@ -21,11 +21,11 @@
       "fields": [
         {
           "type": "mrkdwn",
-          "text": "*能讀什麼*\n• 訊息、圖片、截圖\n• PDF、Word、Excel、PowerPoint\n• 程式碼（最近同步的版本，也能看還沒合併的 branch）\n• Bug/需求總表的待辦與留言"
+          "text": "*能做什麼*\n常見用法例如：\n• 理解程式碼、分析問題、修改與測試\n• 閱讀文件、整理資料、製作圖解\n• 操作瀏覽器、截圖、驗證畫面\n• 查詢、建立與整理 Slack 待辦"
         },
         {
           "type": "mrkdwn",
-          "text": "*能給什麼*\n• Slack 訊息回覆\n• PNG 圖、截圖\n• 程式修改的 patch 檔（要人套用後才會生效）\n• HTML prototype（要開口要，不然給 PNG）"
+          "text": "*常見成果*\n• Slack 訊息回覆\n• PNG 圖、截圖\n• 程式修改的 patch 檔（要人套用後才會生效）\n• HTML prototype（要開口要，不然給 PNG）"
         }
       ]
     },
@@ -34,7 +34,7 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "不需要特殊 prefix，直接說你要什麼就好。"
+          "text": "不需要特殊 prefix。以下列的是常見用法，不是完整能力清單；其他工作也可以直接提出。"
         }
       ]
     },
@@ -66,14 +66,21 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*可查閱的專案*\n以下是最近一次同步的版本，不一定等於 GitHub 最新狀態。\n• `agent-config` — 共用 agent skills 與 MCP 設定\n• `work-docs` — 專案與 API 等產品文件\n• `teamsync-frontend` — TeamSync React 網頁前端\n• `teamsync-backend` — TeamSync 多租戶協作與 AI 平台的 FastAPI 後端\n• `E-commerce-backend` — FastAPI 後端範本（OAuth2/JWT、Docker、MySQL）；沒有已確認的電商產品用途\n• `spc-backend` — FastAPI 後端範本（MySQL、Redis、MinIO、JWT）；沒有已確認的 SPC 產品用途\n• `teamsync-tutorials` — 給客戶看的 TeamSync 操作教學\n• `teamsync-app` — TeamSync Expo iOS／Android 聊天 app，也支援 Web\n• `RPA-Block` — C++ 桌面 RPA 編輯器，支援積木式流程、OCR 與 REST API"
+        "text": "*可查閱的專案*\n以下是最近一次同步的版本，不一定等於 GitHub 最新狀態。\n• `agent-config` — 共用 agent skills 與 MCP 設定\n• `work-docs` — 專案與 API 等產品文件\n• `teamsync-frontend` — TeamSync React 網頁前端\n• `teamsync-backend` — TeamSync 多租戶協作與 AI 平台的 FastAPI 後端\n• `E-commerce-backend` — FastAPI 後端範本（OAuth2/JWT、Docker、MySQL）；沒有已確認的電商產品用途\n• `spc-backend` — FastAPI 後端範本（MySQL、Redis、MinIO、JWT）；沒有已確認的 SPC 產品用途\n• `teamsync-tutorials` — 給客戶看的 TeamSync 操作教學\n• `teamsync-app` — TeamSync Expo iOS／Android 聊天 app，也支援 Web\n• `RPA-Block` — C++ 桌面 RPA 編輯器，支援積木式流程、OCR 與 REST API\n• `vivispa-frontend` — VIVISPA 前台，可查前端程式碼以釐清畫面與操作行為；後端與正式環境問題需其他證據\n• `senyu-pms` — 公司專案管理平台，可查程式碼了解功能與流程；即時專案資料需另外查詢平台\n• `agent-company` — 這個 bot 的部署設定與設計，可查功能、工具同步與限制；snapshot 不代表即時部署狀態"
       }
     },
     {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*裝了哪些工具*\n跟維護者電腦上同一套 skill 與工具，會自動同步。不用記名字，照範例那樣講就會用到，常用的有：\n• `slack-list` 待辦表讀寫 —— 「我還有哪些待辦」「新增待辦：…」\n• `company-imagegen` 生圖 —— 「畫一張這個流程的圖」\n• `show-me` 圖解說明 —— 「用圖解釋這段流程怎麼跑」\n• `grilling` 反過來問你 —— 「需求還不清楚，先問我問題」\n• `verify-in-browser` 瀏覽器驗收 —— 「照這幾條驗收條件在畫面上驗一遍」\n• `codegraph` 查程式關係 —— 「這個函式被哪些地方呼叫？」"
+        "text": "*常用能力與提問範例*\n以下只是常見例子，不是完整能力清單。也可以直接提出其他目標：\n• `slack-list` 查待辦 —— 「我還有哪些待辦？」\n• `company-imagegen` 生圖 —— 「畫一張這個流程的圖」\n• `show-me` 圖解說明 —— 「用圖解釋這段流程怎麼跑」\n• `grilling` 釐清需求 —— 「需求還不清楚，先問我問題」\n• `verify-in-browser` 瀏覽器驗收 —— 「照這幾條條件點一遍，附截圖」\n• CodeGraph 查程式關係 —— 「這個函式被哪些地方呼叫？」\n\n<https://github.com/henry5720/agent-config/tree/main/skills|完整 skill 清單與內容>是共用設定來源；bot 使用最近同步的版本。實際能完成的工作取決於這個環境的工具、連線與權限；需要額外資料或存取權時會說明。"
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*教學與工具介紹（想深入再看）*\n• <https://www.aihero.dev/|Matt Pocock／AI Hero>：coding agent 工作方法與 skills 教學，偏工程實務\n• <https://www.humanlayer.com/blog/show-me-skill|show-me 原作者介紹與範例>：用簡短圖解理解流程與程式結構\n• <https://skillshare.runkids.cc/|Skillshare>：管理、同步自己的 skills 與 MCP\n• <https://herdr.dev/|Herdr>：管理本機與遠端 coding agent\n• <https://github.com/henry5720/agent-company|這個 bot 的部署設計與程式碼>：也可以直接問我「你怎麼同步程式碼？」「你能做什麼、有哪些限制？」\n使用 Slack 助理不需要先安裝這些工具。Home 用簡短文字圖解；詳細流程圖請到 GitHub 文件閱讀。"
       }
     },
     {

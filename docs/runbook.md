@@ -353,6 +353,12 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/work-agent"
 2. 從新版 codex 的 `codex-rs/models-manager/models.json` 重產 `config/codex/catalog.json`（做法見 `config/codex/config.toml` 的註解）。
 3. `./tests/static.sh && ./scripts/deploy.sh`，再跑人工 release gate 第 6 項。build 時會驗 exact version，對不上會失敗，這是刻意的。
 
+### 更新 Slack Home 與使用指南
+
+Slack Home 的文案正本是 `config/slack-home.json`；同事使用指南在 [bot-guide.md](bot-guide.md)，由 README 連入。Home 保留常用能力、提問範例、完整 skill 清單與原作者教學連結；不要抄成所有已安裝工具都能在 Slack 執行的清單。Slack 不渲染 Mermaid，Home 用文字箭頭，完整流程圖放 GitHub 文件。
+
+只改 Home 文案與文件時，執行靜態檢查後用 `./scripts/publish-slack-home.sh` 發布，不需重建或重啟 container。新增 repo 時仍須完成下方 snapshot 同步與唯讀檢查。新文件的 GitHub 連結須等 commit／push 後才會可讀；尚未發布時只連已存在的 repo 入口。
+
 ### 更新 Skill、MCP 或個人規則
 
 bot 的 skills、MCP 與個人規則跟維護者機器同一份，正本是 agent-config。在任一台機器照平常 `skillshare install`／`mcp add`、push 到 agent-config 後，host 每小時同步 snapshot，結束時在 bot 裡跑 `agent-sync`（`skillshare sync -g`、`skillshare sync mcp -g`，再重組 `~/.codex/AGENTS.md`）。要立即生效就在 host 上執行 `./scripts/update-snapshots.sh`；已開的 Codex session 要等下一個 session 才讀到。
