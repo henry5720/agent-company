@@ -90,8 +90,8 @@ compose exec -T agent sh -lc \
 
 compose ps
 
-# preflight.sh 在 build 前已完成 R2 secret/host 檢查，並以 interactive gate 確認 lifecycle
-# 與 Slack files:read；若沒有 TTY 或任一項未確認，deploy 在這裡就已中止。這支跑完仍不等於
+# preflight.sh 在 build 前已完成 R2 secret/host 檢查。R2 lifecycle 與 Slack files:read 是
+# runbook 的一次性設定，這裡不再每次確認。這支跑完仍不等於
 # 這一版可以放給人用。上面每一條都是 container 內的存在性與權限檢查，
 # 沒有一條打過 Slack、公司 gateway 或 STT，也沒有一條證明排程真的會觸發。
 # 那些只能由人在有 secret 的環境做一次，做完才算 release。

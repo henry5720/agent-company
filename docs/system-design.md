@@ -106,7 +106,7 @@ agent 先找對應的既有待辦列；找不到而使用者明確要求建立�
 
 Slack 的 native 輸入是 text、image，以及啟用 STT 時的 audio。PDF、DOCX、XLSX、PPTX 這類附件走 OpenAB 的 R2 filestore：OpenAB 把 R2 `incoming/` 的 presigned URL 與原始 filename 放進 prompt，agent 自己下載、轉成文字再回答；需要轉檔工具就裝在 home。轉不出來（例如需要 OCR 的掃描檔）就直說，不猜內容。agent 只下載 OpenAB 放進 prompt 的那個 URL，不把它傳給其他服務。presigned URL 會隨 prompt 送到公司 gateway。
 
-R2 filestore 的設定正本是 `config/openab.toml` 的 `[filestore]`。R2 access key 與 secret key 只透過 `${R2_ACCESS_KEY_ID}`／`${R2_SECRET_ACCESS_KEY}` interpolation 從未追蹤的 `env/openab.env` 取得，不寫入 repo。R2 bucket 必須在外部設定 `incoming/` prefix 的 1 天 lifecycle expiration；Slack app 讀取 incoming attachment 需要 `files:read`，更新 scope 後必須 Reinstall to Workspace。preflight 不嘗試用 Cloudflare 或 Slack API 驗證這兩項，而是要求 interactive checklist；沒有 TTY 的 deploy 安全中止。
+R2 filestore 的設定正本是 `config/openab.toml` 的 `[filestore]`。R2 access key 與 secret key 只透過 `${R2_ACCESS_KEY_ID}`／`${R2_SECRET_ACCESS_KEY}` interpolation 從未追蹤的 `env/openab.env` 取得，不寫入 repo。R2 bucket 必須在外部設定 `incoming/` prefix 的 1 天 lifecycle expiration；Slack app 讀取 incoming attachment 需要 `files:read`，更新 scope 後必須 Reinstall to Workspace。preflight 不嘗試用 Cloudflare 或 Slack API 驗證這兩項；它們是 runbook 的一次性設定，deploy 不逐次確認。
 
 輸出是 Slack 訊息本文、PNG、`.patch` 與 Markdown 檔。self-contained HTML 只有在使用者明確要求 prototype 或可互動頁面時才輸出，而且必須是單一檔案。所有產物回到發問的那個 Slack thread；`slack-thread-artifact` 成功上傳才刪暫存，失敗保留交 host cleanup。「回原 thread」是同一個 container 內的信任約定，不是安全保證，細節見下面「『回原 thread』靠的是什麼」。
 

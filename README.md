@@ -61,7 +61,7 @@ R2_ACCESS_KEY_ID=<Cloudflare R2 access key>
 R2_SECRET_ACCESS_KEY=<Cloudflare R2 secret key>
 ```
 
-R2 bucket 必須手動設定 `incoming/` prefix 的 **1 天 lifecycle expiration**；Slack app 必須有 `files:read`，改 scope 後要 **Reinstall to Workspace**。`preflight.sh` 不呼叫 Cloudflare 或 Slack API，它會拒絕缺少／placeholder 的 R2 secret 與錯誤 endpoint，再要求維護者在互動式 terminal 逐項確認這兩件事。`deploy.sh` 強制經過這個 gate，noninteractive deploy 會中止。
+R2 bucket 必須手動設定 `incoming/` prefix 的 **1 天 lifecycle expiration**；Slack app 必須有 `files:read`，改 scope 後要 **Reinstall to Workspace**。`preflight.sh` 不呼叫 Cloudflare 或 Slack API，它會拒絕缺少／placeholder 的 R2 secret 與錯誤 endpoint，這兩件事是第一次部署時照 runbook 做一次的設定，部署時不再逐次確認。
 
 ## Repo 內容
 

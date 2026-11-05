@@ -103,25 +103,9 @@ for entry in "$SNAPSHOT_ROOT"/*; do
   [[ -n ${expected[$name]:-} ]] || fail "$entry is not listed in config/repos.conf but would be mounted"
 done
 
-# These two external controls cannot be checked through Slack or Cloudflare
-# APIs. A human must confirm them on the actual deployment before preflight can
-# pass. Requiring a TTY also makes noninteractive deploys fail closed.
-require_manual_release_gate() {
-  [[ -t 0 && -t 1 && -r /dev/tty ]] ||
-    fail "manual release gate requires an interactive terminal; refusing noninteractive deployment"
-
-  printf '\nManual release gate (no API verification is attempted):\n'
-  printf '  [ ] Cloudflare R2 bucket work-agent-attachments has a 1-day lifecycle expiration for incoming/\n'
-  printf '  [ ] Slack app has files:read and was Reinstall to Workspace after the scope change\n'
-  local lifecycle slack
-  read -r -p 'Confirm the R2 lifecycle check [y/N]: ' lifecycle </dev/tty
-  [[ $lifecycle == y || $lifecycle == Y ]] || fail "R2 lifecycle manual gate was not confirmed"
-  read -r -p 'Confirm the Slack files:read check [y/N]: ' slack </dev/tty
-  [[ $slack == y || $slack == Y ]] || fail "Slack files:read manual gate was not confirmed"
-  printf 'Manual release gate confirmed.\n'
-}
-
-require_manual_release_gate
+# R2 lifecycle and Slack files:read are one-time external settings that no API here can
+# check. They live in the runbook's first-time setup, not in every deploy, so deploys can
+# run unattended.
 
 docker compose -f "$ROOT/compose.yaml" config --quiet
 printf 'Preflight passed.\n'

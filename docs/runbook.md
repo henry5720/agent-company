@@ -100,7 +100,7 @@ R2_SECRET_ACCESS_KEY=<Cloudflare R2 secret key>
 
 完成後確認檔案權限仍是 `600` 或 `640`。Cloudflare R2 bucket `work-agent-attachments` 還必須手動建立 lifecycle rule，讓 `incoming/` 物件 **1 天後過期**；這個外部設定不在 repo 內，也不會被 static test 或 API 驗證。
 
-`preflight.sh` 會拒絕缺少／placeholder 的 R2 secrets 與不對的 `[filestore].endpoint`，並在繼續前要求人工逐項確認 R2 lifecycle 與 Slack `files:read`；不會嘗試呼叫 Cloudflare 或 Slack API。沒有 interactive TTY 的 `preflight.sh`／`deploy.sh` 會安全中止。
+`preflight.sh` 會拒絕缺少／placeholder 的 R2 secrets 與不對的 `[filestore].endpoint`，不會呼叫 Cloudflare 或 Slack API。R2 lifecycle 與 Slack `files:read`（第 1 節）是一次性設定，部署時不再逐次確認，所以 `deploy.sh` 可以無人值守執行；換 bucket 或改 Slack scope 時照這兩節重做一次。
 
 文件附件（PDF、DOCX、XLSX、PPTX 等）由 OpenAB 把 R2 `incoming/` presigned URL 與原始 filename 放進 prompt；agent 自己下載、轉成文字再回答，需要的轉檔工具裝在 home。需要 OCR 的掃描檔轉不出來時，agent 會直說。presigned URL 會隨 prompt 送到公司 gateway。
 
@@ -217,7 +217,7 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 
 ### 人工 release gate
 
-`tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、Codex 版本對、provider 設定已產生且唯讀、home 可寫而 snapshot 與 skills 不可寫」；preflight 另外只做 R2 secret／endpoint 檢查和 R2 lifecycle、Slack `files:read` 的人工 checklist。**不會呼叫 Slack、Cloudflare、公司 gateway 或 STT，也不會證明 crontab 真的觸發過。** 沒有 Docker 的機器上 `tests/static.sh` 連 Compose render 都是本機解析（它會印 LIMITED VERIFICATION）。
+`tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、Codex 版本對、provider 設定已產生且唯讀、home 可寫而 snapshot 與 skills 不可寫」；preflight 另外只做 R2 secret／endpoint 檢查；R2 lifecycle 與 Slack `files:read` 是第一次部署的一次性設定。**不會呼叫 Slack、Cloudflare、公司 gateway 或 STT，也不會證明 crontab 真的觸發過。** 沒有 Docker 的機器上 `tests/static.sh` 連 Compose render 都是本機解析（它會印 LIMITED VERIFICATION）。
 
 所以下面這幾項是人工 gate，每次 release 都要重跑一遍，不能因為 `deploy.sh` 退出 0 就當它們過了。編號與 `deploy.sh` 結束時印的清單相同：
 
