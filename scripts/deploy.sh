@@ -100,8 +100,8 @@ cat <<'GATE'
 Deploy finished. What it just verified: the container starts, the pinned codex and
 codex-acp are the ones config/versions.env records, agent-sync synced the provider,
 rules, skills and MCP from agent-config, the Chrome sidecar answers on 127.0.0.1:9222,
-the retired runtimes are gone, and home is writable while the snapshot is not. Preflight also confirmed the R2 host and credentials
-are present and recorded the two manual prerequisite confirmations.
+the retired runtimes are gone, the sidecar has its CJK fonts, and home is writable while
+the snapshot is not. Preflight also confirmed the R2 host and credentials are present.
 
 NOT VERIFIED HERE — manual release gate, see the "人工 release gate" section of
 docs/runbook.md. Do not call this version released until every line is ticked off:
