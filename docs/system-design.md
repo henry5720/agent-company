@@ -145,6 +145,8 @@ Runtime 或部署故障造成工具不能執行時，agent 只告知哪項查詢
 
 OpenAB 直接跑 `codex-acp`，初始 mode 是 `agent-full-access`。這是 OpenAB 官方對 container 部署的建議：container 內建不了 sandbox namespace，其他 mode 的 shell 不是失敗就是每條都要人按允許；邊界是 container 本身。`CODEX_HOME`、`CODEX_PATH` 與 mode 的設定在 [`config/openab.toml`](../config/openab.toml) 的 `[agent]`，每一項的理由寫在該檔註解。
 
+cloudflared 由 Dockerfile 從 GitHub release 下載固定版本、驗 SHA-256 後裝進 `/usr/local/bin`，deploy 驗 container 裡的版本等於版本正本。
+
 Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本>`，build 時驗 exact version；上游 image 自帶的那兩個不用。Codex 的 model catalog 是 [`config/codex/catalog.json`](../config/codex/catalog.json)，升級 Codex 時要重產，parse 失敗 Codex 整個起不來。
 
 所有版本與 OpenAB immutable image digest 集中在 [`config/versions.env`](../config/versions.env)；`compose.yaml` 使用 checked-in build args，因此 `docker compose` 可直接 render。
@@ -159,6 +161,13 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
   - `/etc/codex/catalog.json` 與 `/etc/openab/config.toml`。
 - `~/.codex/config.toml`、`~/.codex/AGENTS.md`、`~/.agents/skills` 由 [`agents/bin/agent-sync`](../agents/bin/agent-sync) 在 OpenAB `pre_boot` 與每小時 snapshot 同步後產生，跟維護者機器的 chezmoi + skillshare 同一套：provider 換新、skillshare 寫的 MCP 條目保留（整份覆蓋會讓 skillshare 拒絕同步），規則是維護者個人規則接上 bot 專屬規則。這幾個檔在 home 裡、agent 改得到；agent 本來就拿得到 gateway key，這是 ADR 0012 接受的取捨。
 - `chrome` sidecar 跑固定 digest 的 headless Chrome，加一層固定版本的中文字型（[`chrome/Dockerfile`](../chrome/Dockerfile)，理由見 [`adr/0014-add-cjk-fonts-to-the-chrome-sidecar.md`](adr/0014-add-cjk-fonts-to-the-chrome-sidecar.md)），透過只持有網路的 `net`（k8s pause container）跟 agent 共用 localhost，任一邊重啟都不影響另一邊：agent 的 playwright-cli（`attach --cdp`）與 chrome-devtools MCP 都連 `127.0.0.1:9222`（跟維護者機器同一個 `--browser-url`），Chrome 開得到 agent 跑起來的 dev server。sidecar 沒有 token 與 volume，只聽 127.0.0.1。使用者連不到它；給人看的預覽網址之後另做。
+- 同事的 Chrome 經插件加一次性 tunnel 接進來，跟 sidecar 是兩回事：同事在 DM 請 agent 接他的瀏覽器，agent 跑 agent-config browser-access skill 的 `personal-chrome-attach --tunnel`，它起 playwright-cli 的插件 relay（container 的 localhost、隨機 port），再用 image 裡的 cloudflared 開一條 tcp quick tunnel 指向 relay。同事在自己的電腦跑 `cloudflared access tcp --hostname <x>.trycloudflare.com --url 127.0.0.1:9555`，在 Playwright Extension 貼上 connect 網址、按允許。
+
+  ```text
+  同事 Chrome ─插件─▶ 127.0.0.1:9555 ─cloudflared access tcp─▶ <x>.trycloudflare.com ─tcp quick tunnel─▶ container 的 relay ◀─ playwright-cli
+  ```
+
+  relay 唯一的門檻是 connect 網址裡的隨機 UUID，所以 connect 網址就是鑰匙：只在 DM 交付（`agents/AGENTS.md`；DM 的 thread 只有本人看得到），接線結束或逾時 tunnel 就收掉，每次由同事在插件端核准。接上之後，同一個 thread 裡任何人叫 agent 做事，用的都是那位同事的瀏覽器；這點在 [bot-guide](bot-guide.md#接你自己的瀏覽器) 提醒，不加限制。Chrome sidecar 的 9222 與 `show` 的 9377 照舊不開。設計與原型紀錄見 [#43](https://github.com/henry5720/agent-company/issues/43)。
 - `/home/node/snapshots/.index` 是唯一可寫的 snapshot 相關路徑。每個 snapshot 的 `.codegraph-company` 是指向 `.index/<repo>` 的相對 symlink；CodeGraph 索引是 WAL 模式的 SQLite，必須可寫。索引由 host 每小時用 runtime image 重建，agent 只能查詢。
 - Container 使用者的 uid/gid 由 `HOST_UID`／`HOST_GID` build arg 設定，必須等於執行 docker 的 host 使用者，可寫 bind mount 才成立。
 - Bind mount 帶 `:z`，SELinux enforcing 的 host 才讀得到；`z` 會 relabel 來源目錄，所以 snapshot root 是專用目錄。
@@ -189,7 +198,7 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
 5. 在待辦列 item 留言串詢問該列現況時，agent 在同一串用 Slack 訊息回答，待辦狀態不變。
 6. Container 內 home 可寫、所有 snapshots 與 skills 不可寫、`.index` 可寫，且沒有可用的 GitHub auth 或 SSH key。
 7. Host 同步後，所有新 session 讀到同一個基準 branch 版本。
-8. `./scripts/deploy.sh` 驗到 PATH 上的 `codex-acp` 與 `CODEX_PATH` 指向 `/opt/codex-<CODEX_VERSION>`、兩者版本等於 `config/versions.env`、`/etc/openab/config.toml` 的 agent 是 `codex-acp`、Codex provider 設定已填入 gateway 位址且唯讀，退場的 runtime 不在 PATH 上。
+8. `./scripts/deploy.sh` 驗到 PATH 上的 `codex-acp` 與 `CODEX_PATH` 指向 `/opt/codex-<CODEX_VERSION>`、兩者版本等於 `config/versions.env`、`/etc/openab/config.toml` 的 agent 是 `codex-acp`、Codex provider 設定已填入 gateway 位址且唯讀、cloudflared 版本等於 `config/versions.env`，退場的 runtime 不在 PATH 上。
 9. 模型推論直連公司 gateway：一個 Slack 問題得到回答、開頭沒有 model metadata warning，shell tool call 可用。
 10. 圖片附件能進到模型；文件附件由 agent 從 OpenAB 提供的 R2 URL 下載轉文字後回答，轉不出來時明說。
 11. 一般請求得到 PNG；明確要求 prototype 時才得到單一檔案的 HTML；都由受限 uploader 回原 thread。
@@ -201,6 +210,7 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
 17. 上傳成功後暫存檔被刪；但暫存檔在讀取之後被換成別的檔案或 symlink 時，**不刪**那個東西，在 stderr 說明並仍 exit 0（檔案確實送出去了，回非零只會讓 agent 重傳）。
 18. Deployment host 的 crontab 有 `# agent-company-artifact-cleanup` entry，每小時執行 `scripts/cleanup-artifacts.sh`，它在 container 內跑 `slack-list cleanup`；container 沒在跑時這一輪失敗會寫進 `artifact-cleanup.log` 並回非零。排程存在由 `tests/static.sh` render `render_crontab` 驗；cron 真的觸發過只能人工確認。
 19. `tests/static.sh` 與 `scripts/deploy.sh` 都不聲稱驗過 Slack、公司 gateway、STT 或 cron 觸發；`deploy.sh` 結束時印出未驗清單，對應 [`runbook.md`](runbook.md#人工-release-gate) 的「人工 release gate」。
+20. 同事在 DM 請 agent 接他的瀏覽器，照回覆的三步（裝 cloudflared、跑 `cloudflared access tcp`、在 Playwright Extension 貼 connect 網址）就接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址。只能人工驗收；cloudflared 版本由 `deploy.sh` 驗。
 
 ## 人工前置作業
 

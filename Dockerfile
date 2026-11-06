@@ -9,6 +9,9 @@ ARG SKILLSHARE_VERSION
 ARG PLAYWRIGHT_CLI_VERSION
 ARG SKILLSHARE_LINUX_AMD64_SHA256
 ARG SKILLSHARE_LINUX_ARM64_SHA256
+ARG CLOUDFLARED_VERSION
+ARG CLOUDFLARED_LINUX_AMD64_SHA256
+ARG CLOUDFLARED_LINUX_ARM64_SHA256
 
 # Bind mounts carry host ownership, so the container user must share the host
 # user's uid/gid. Only /home/node and /usr/local/bin/openab are owned by the
@@ -66,6 +69,21 @@ RUN set -eu; \
     rm "/tmp/$tarball"; \
     chown root:root /usr/local/bin/skillshare; chmod 0755 /usr/local/bin/skillshare; \
     skillshare --version | grep -qF "v${SKILLSHARE_VERSION}"
+
+# cloudflared：同事在 DM 請 agent 接他的 Chrome 時，personal-chrome-attach --tunnel 用它開一次性
+# tcp quick tunnel。跟 skillshare 一樣從 GitHub release 下載固定版本，SHA-256 不符就中止。
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) arch=amd64; sum="$CLOUDFLARED_LINUX_AMD64_SHA256" ;; \
+      arm64) arch=arm64; sum="$CLOUDFLARED_LINUX_ARM64_SHA256" ;; \
+      *) echo "unsupported architecture" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/cloudflared \
+      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${arch}"; \
+    echo "$sum  /tmp/cloudflared" | sha256sum -c -; \
+    install -o root -g root -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared; \
+    rm /tmp/cloudflared; \
+    cloudflared --version | grep -qF "cloudflared version ${CLOUDFLARED_VERSION} "
 
 # 生圖／改圖的唯一入口。它只用 Python 3 stdlib。
 # root 擁有、0755：agent 可以執行，不能改寫。

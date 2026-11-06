@@ -53,6 +53,26 @@ Snapshot 是最近同步成功的程式碼，未必等於正式環境。新增 s
 
 前端 code 可協助查操作條件與 API 呼叫；後端與正式環境資料仍需其他證據。專案管理平台的 snapshot 可解釋平台如何運作，直接讀寫即時專案資料則需要另接 API／MCP。
 
+## 接你自己的瀏覽器
+
+助理平常用自己的 headless Chrome，結果截圖回 thread。網站要你登入、你想看著它做或中途接手時，可以請它接你自己的 Chrome。
+
+**在 DM 叫它**，例如「幫我接我的瀏覽器，到後台把這筆訂單的狀態查出來」。在 channel 提出時，它會請你改到 DM：它回給你的 connect 網址就是鑰匙，拿到的人能操作那支 Chrome，DM 的 thread 只有你看得到。
+
+它會回三步，照做就接上：
+
+1. 安裝 cloudflared（第一次才要），依你的 OS 從 Cloudflare 官方下載頁選；
+2. 開一個新的終端機，貼上它給的那一行（hostname 已填好），開著別關；
+3. 在裝了 [Playwright Extension](https://github.com/henry5720/dotfiles/blob/main/docs/remote-access/browser.md#插件獨立-profile日常-profile-都能裝) 的 Chrome 開新分頁，貼上 connect 網址，在插件畫面選分頁、按允許。
+
+要在約 5 分鐘內做完，逾時它會收掉，再叫一次就好（網址每次不同）。每一步在做什麼、卡住怎麼查，見 [browser.md 的〈tailnet 外：一次性 tunnel〉](https://github.com/henry5720/dotfiles/blob/main/docs/remote-access/browser.md#tailnet-外一次性-tunnel)；卡住時把終端機印出的錯誤和你的 OS 貼給它，它會針對教你。
+
+接上之後它開新分頁做事，不蓋掉你正在看的那頁；每一步你都看得到，要輸入密碼或核准時直接接手。用完它會 detach、收掉 tunnel，網址立刻失效，Chrome 和分頁留著。
+
+**建議裝在獨立 profile**：在 Chrome 另開一個 profile 只裝這個插件、只登入這次要用的網站。插件接上期間，助理用的是這個 profile 裡所有的登入；日常 profile 裡有你的信箱、公司帳號和各種登入，獨立 profile 只交出你願意交的那幾個。一定要日常 profile 裡的東西（passkey、硬體金鑰、裝置 SSO）時，裝在日常 profile 也可以，由你決定，見 [browser.md 的〈插件〉](https://github.com/henry5720/dotfiles/blob/main/docs/remote-access/browser.md#插件獨立-profile日常-profile-都能裝)。
+
+**接上之後，這個 thread 裡任何人叫助理做事，用的都是你的瀏覽器。** 助理所有對話共用同一個工作區，別的對話也叫得到這條連線。這裡不另加限制：接著的時候看著它做，用完就請它 detach。
+
 ## Skills 與原作者教學
 
 Slack Home 保留常用能力與提問範例；[完整 skill 清單與內容](https://github.com/henry5720/agent-config/tree/main/skills)在 agent-config，由 Skillshare 同步到 bot。GitHub 清單可能比 bot 最近同步的版本更新。Skills 提供做事的方法，Home 的例子也不涵蓋所有用途；實際執行仍取決於環境的工具、連線、權限與 bot 規則。

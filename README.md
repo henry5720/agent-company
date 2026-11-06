@@ -27,6 +27,7 @@ Slack
       -> /home/node/snapshots/.index  CodeGraph 索引，可寫
       -> ~/.agents/skills、~/.codex 的 MCP 與 AGENTS.md   agent-sync 用 skillshare 從 agent-config 裝，跟維護者機器同一套
   -> chrome sidecar（共用 localhost）  headless Chrome，127.0.0.1:9222；playwright-cli attach 操作與截圖，chrome-devtools MCP 查問題
+  -> 同事的 Chrome（只在 DM，用時才接） Playwright Extension -> 一次性 cloudflared tcp tunnel -> container 裡的 relay
       -> Cloudflare R2 filestore（incoming attachments）
 
 deployment host
@@ -35,13 +36,14 @@ deployment host
   -> 專用 GitHub SSH key，只存在 host
 ```
 
-Container 沒有 GitHub token、SSH key 或 Docker socket。image 裡有 `gh`（官方 image 自帶），但沒有 token，什麼都推不出去。Runtime image 由固定 multi-arch digest 的 OpenAB Codex image 建置，加上固定版本的 Codex CLI、codex-acp、CodeGraph 與 Python 3；版本正本在 [`config/versions.env`](config/versions.env)。
+Container 沒有 GitHub token、SSH key 或 Docker socket。image 裡有 `gh`（官方 image 自帶），但沒有 token，什麼都推不出去。Runtime image 由固定 multi-arch digest 的 OpenAB Codex image 建置，加上固定版本的 Codex CLI、codex-acp、CodeGraph、cloudflared 與 Python 3；版本正本在 [`config/versions.env`](config/versions.env)。
 
 接受的取捨，照實寫：
 
 - Slack bot token、公司 gateway key 與 agent 執行的 repo code（含第三方套件的 install script）在同一個 container。沒有 broker、proxy 或 token 隔離。
 - home 沒有自動清理，clone 與套件快取會累積。
 - dev server 只在 container 內看得到，要給人看就截圖。預覽網址之後另做。
+- 同事的 Chrome 經插件加一次性 tunnel 接進來：同事在 DM 請 agent 接他的瀏覽器，agent 用 image 裡固定版本的 cloudflared 開一條 tcp quick tunnel，同事在自己的電腦跑一行 `cloudflared access tcp`、在插件按允許。connect 網址就是鑰匙，所以只在 DM 交付；用完 tunnel 收掉、網址失效。Chrome sidecar 照舊不開給任何人。使用方式見[使用指南](docs/bot-guide.md#接你自己的瀏覽器)，設計見 [#43](https://github.com/henry5720/agent-company/issues/43)。
 
 ## 輸入與輸出
 

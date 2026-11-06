@@ -53,8 +53,12 @@ for forbidden in ('OPENAB_AGENT_RUNTIME', 'OPENAB_IMAGE_OPENCODE', 'OPENAB_IMAGE
 assert '@sha256:' in versions['OPENAB_IMAGE']
 tag = versions['OPENAB_IMAGE'].split('@', 1)[0].rsplit(':', 1)[-1]
 assert tag not in ('latest', 'beta', 'stable')
-for key in ('CODEX_VERSION', 'CODEX_ACP_VERSION', 'CODEGRAPH_VERSION', 'SKILLSHARE_VERSION', 'PLAYWRIGHT_CLI_VERSION'):
+for key in ('CODEX_VERSION', 'CODEX_ACP_VERSION', 'CODEGRAPH_VERSION', 'SKILLSHARE_VERSION', 'PLAYWRIGHT_CLI_VERSION',
+            'CLOUDFLARED_VERSION'):
     assert re.fullmatch(r'\d+\.\d+\.\d+', versions[key]), key
+for key in ('SKILLSHARE_LINUX_AMD64_SHA256', 'SKILLSHARE_LINUX_ARM64_SHA256',
+            'CLOUDFLARED_LINUX_AMD64_SHA256', 'CLOUDFLARED_LINUX_ARM64_SHA256'):
+    assert re.fullmatch(r'[0-9a-f]{64}', versions[key]), key
 for retired in ('OPENCODE_VERSION', 'OMO_VERSION', 'CLAUDE_AGENT_ACP_VERSION',
                 'CLAUDE_CODE_VERSION', 'DOCLING_VERSION', 'SANDBOX_NODE_IMAGE',
                 'PLAYWRIGHT_VERSION', 'OFFICEPARSER_VERSION', 'CADDY_VERSION'):
@@ -82,6 +86,13 @@ for retired in ('opencode', 'oh-my-opencode', 'claude-agent-acp', 'claude-code',
 assert 'mkdir -p /home/node/.codex /home/node/.agents /home/node/snapshots /home/node/.local/bin' in dockerfile
 assert '/home/node/.config/skillshare' in dockerfile, 'skillshare config mount point must be owned by node'
 assert 'sha256sum -c' in dockerfile and 'ARG SKILLSHARE_LINUX_AMD64_SHA256' in dockerfile, 'skillshare download must be checksum-verified'
+# cloudflared：company agent 接同事瀏覽器的一次性 tunnel（#43）。跟 skillshare 一樣從 GitHub release 拿固定版本、驗 SHA-256。
+for arg in ('CLOUDFLARED_VERSION', 'CLOUDFLARED_LINUX_AMD64_SHA256', 'CLOUDFLARED_LINUX_ARM64_SHA256'):
+    assert f'ARG {arg}\n' in dockerfile, arg
+assert 'https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${arch}' in dockerfile
+cf_block = dockerfile[dockerfile.index('cloudflared-linux-${arch}'):]
+assert cf_block.index('sha256sum -c') < cf_block.index('/usr/local/bin/cloudflared'), \
+    'cloudflared must be checksum-verified before it is installed'
 # agent is not root: global npm installs must land in home.
 assert "prefix=/home/node/.local" in dockerfile and 'ENV PATH=/home/node/.local/bin:$PATH' in dockerfile
 
@@ -117,13 +128,13 @@ assert 'VERSION_FILE="$ROOT/config/versions.env"' in deploy
 assert "while IFS='=' read -r key value; do" in deploy
 assert 'done < "$VERSION_FILE"' in deploy
 assert 'source "$VERSION_FILE"' not in deploy and 'eval ' not in deploy
-assert 'version_keys=(CODEX_VERSION CODEX_ACP_VERSION CODEGRAPH_VERSION)' in deploy
-assert 'CODEX_VERSION|CODEX_ACP_VERSION|CODEGRAPH_VERSION)' in deploy
+assert 'version_keys=(CODEX_VERSION CODEX_ACP_VERSION CODEGRAPH_VERSION CLOUDFLARED_VERSION)' in deploy
+assert 'CODEX_VERSION|CODEX_ACP_VERSION|CODEGRAPH_VERSION|CLOUDFLARED_VERSION)' in deploy
 assert '[[ -z ${!key:-} ]]' in deploy, 'pre-set version environment values must be preserved'
 loader_start = deploy.index('VERSION_FILE=')
 loader_end = deploy.index('compose() {', loader_start)
 loader = deploy[loader_start:loader_end]
-version_keys = ('CODEX_VERSION', 'CODEX_ACP_VERSION', 'CODEGRAPH_VERSION')
+version_keys = ('CODEX_VERSION', 'CODEX_ACP_VERSION', 'CODEGRAPH_VERSION', 'CLOUDFLARED_VERSION')
 print_versions = 'printf "%s\\n" ' + ' '.join(f'"${{{key}}}"' for key in version_keys)
 clean_env = {'PATH': os.environ.get('PATH', '')}
 def run_loader(extra):
@@ -138,6 +149,28 @@ overridden = run_loader({'CODEX_VERSION': '9.8.7'}).stdout.splitlines()
 assert overridden == ['9.8.7', *[versions[key] for key in version_keys[1:]]], 'explicit version override must be preserved'
 assert run_loader({'CODEX_VERSION': 'latest'}).returncode != 0, 'a floating version override must fail'
 # deploy renders the provider config before the container starts; the mount reads the rendered file.
+# deploy 驗 container 裡的 cloudflared 是版本正本那版；沒裝或版本錯，deploy 失敗。
+assert 'check_cloudflared_version "$CLOUDFLARED_VERSION" compose exec -T agent cloudflared' in deploy
+import tempfile
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(tmp)
+    def fake(name, out):
+        path = tmp / name
+        path.write_text(f'#!/bin/sh\nprintf "%s\\n" "{out}"\n')
+        path.chmod(0o755)
+        return str(path)
+    def check(want, *cmd):
+        return subprocess.run(
+            ['bash', '-c', 'set -euo pipefail; source "$1/scripts/lib.sh"; shift; check_cloudflared_version "$@"',
+             'test', str(root), want, *cmd], capture_output=True, text=True)
+    right = fake('right', 'cloudflared version 2026.10.7 (built 2026-10-30-17:05 UTC)')
+    older = fake('older', 'cloudflared version 2026.10.70 (built 2026-10-30-17:05 UTC)')
+    ok = check('2026.10.7', right)
+    assert ok.returncode == 0, ok.stderr
+    for name, cmd in (('wrong version', older), ('not installed', str(tmp / 'missing'))):
+        failed = check('2026.10.7', cmd)
+        assert failed.returncode != 0, f'deploy must fail when cloudflared is {name}'
+        assert 'FAIL' in failed.stderr and 'cloudflared' in failed.stderr, failed.stderr
 assert deploy.index('render_codex_config') < deploy.index('compose up')
 
 snapshot_updater = (root / 'scripts/update-snapshots.sh').read_text()
@@ -171,6 +204,9 @@ assert bot['build']['args'] == {
     'PLAYWRIGHT_CLI_VERSION': versions['PLAYWRIGHT_CLI_VERSION'],
     'SKILLSHARE_LINUX_AMD64_SHA256': versions['SKILLSHARE_LINUX_AMD64_SHA256'],
     'SKILLSHARE_LINUX_ARM64_SHA256': versions['SKILLSHARE_LINUX_ARM64_SHA256'],
+    'CLOUDFLARED_VERSION': versions['CLOUDFLARED_VERSION'],
+    'CLOUDFLARED_LINUX_AMD64_SHA256': versions['CLOUDFLARED_LINUX_AMD64_SHA256'],
+    'CLOUDFLARED_LINUX_ARM64_SHA256': versions['CLOUDFLARED_LINUX_ARM64_SHA256'],
     'HOST_UID': '${HOST_UID:-1000}',
     'HOST_GID': '${HOST_GID:-1000}',
 }, 'bot build args must equal config/versions.env'

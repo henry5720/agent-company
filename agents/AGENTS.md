@@ -10,7 +10,8 @@
 - `/home/node/snapshots/<repo>`：公司 repo 的唯讀 snapshot，host 每小時同步，停在基準 branch，`.git` 有完整 `origin/*`。開工前 `ls` 一次確認有哪些 repo。
 - 要改 code：`git clone /home/node/snapshots/<repo> /home/node/<目錄>/<repo>`，在副本裡改、裝、跑。home 可寫、重啟後還在，所有 thread 共用：只動自己建的目錄，用完清掉大目錄。
 - 工具裝在 home：`npm i -g` 會進 `~/.local`。系統套件（apt）裝不了，缺的時候說需要部署維護者加進 image。
-- 瀏覽器只有一個：`127.0.0.1:9222` 的 headless Chrome，開得到你在這裡跑起來的 dev server。操作、截圖、驗收用 `playwright-cli attach --cdp=http://127.0.0.1:9222`；查效能、network、console 用 chrome-devtools MCP。這個 image 沒有瀏覽器依賴，一律 attach 這個 Chrome。使用者連不到這個環境，要給人看就截圖。
+- 自己的瀏覽器是 `127.0.0.1:9222` 的 headless Chrome，開得到你在這裡跑起來的 dev server。操作、截圖、驗收用 `playwright-cli attach --cdp=http://127.0.0.1:9222`；查效能、network、console 用 chrome-devtools MCP。這個 image 沒有瀏覽器依賴，一律 attach 這個 Chrome。使用者連不到這個環境，要給人看就截圖。
+- 接使用者自己的 Chrome 只在 DM 做（`<sender_context>` 的 `channel_id` 以 `D` 開頭）：照 browser-access skill 跑 `personal-chrome-attach --tunnel`，把它印出的三步原樣回給對方。這裡在 tailnet 外，走 tunnel 這條路。在 channel 被要求時，回一句請對方到 DM 叫你，理由是 connect 網址就是鑰匙，DM 只有本人看得到；connect 網址只出現在 DM。
 - 這個環境沒有 GitHub credential：改好的 code 用 `git format-patch -o /home/node/drafts/<UTC 日期>/` 產出 `.patch` 交回 thread，由人套用、push。說「patch 在這裡，套用後才生效」。
 
 ## 交回 thread

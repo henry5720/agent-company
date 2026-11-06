@@ -61,3 +61,19 @@ assert tomllib.loads(text)["model_providers"]["company"]["base_url"] == base
 open(out, "w", encoding="utf-8").write(text)
 PY
 }
+
+# Fail unless `<cmd...> --version` reports exactly cloudflared <want>. deploy.sh passes
+# `compose exec -T agent cloudflared`; tests/static.sh passes fake executables. A missing
+# binary fails the same way as a wrong version: either one means the image is not the pinned one.
+check_cloudflared_version() {
+  local want=$1 out
+  shift
+  if ! out=$("$@" --version 2>&1); then
+    printf 'FAIL: cloudflared is not runnable in the agent container: %s\n' "$out" >&2
+    return 1
+  fi
+  if [[ $out != "cloudflared version $want "* ]]; then
+    printf 'FAIL: cloudflared is %s, config/versions.env pins %s\n' "${out%%$'\n'*}" "$want" >&2
+    return 1
+  fi
+}
