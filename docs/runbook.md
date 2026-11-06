@@ -217,7 +217,7 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 
 ### 人工 release gate
 
-`tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、Codex 版本對、provider 設定已產生且唯讀、home 可寫而 snapshot 與 skills 不可寫」；preflight 另外只做 R2 secret／endpoint 檢查；R2 lifecycle 與 Slack `files:read` 是第一次部署的一次性設定。**不會呼叫 Slack、Cloudflare、公司 gateway 或 STT，也不會證明 crontab 真的觸發過。** 沒有 Docker 的機器上 `tests/static.sh` 連 Compose render 都是本機解析（它會印 LIMITED VERIFICATION）。
+`tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、Codex 版本對、provider 設定已產生且唯讀、cloudflared 是釘住的版本、`mcpdo` 跑得起來、home 可寫而 snapshot 與 skills 不可寫」；preflight 另外只做 R2 secret／endpoint 檢查；R2 lifecycle 與 Slack `files:read` 是第一次部署的一次性設定。**不會呼叫 Slack、Cloudflare、公司 gateway 或 STT，也不會證明 crontab 真的觸發過。** 沒有 Docker 的機器上 `tests/static.sh` 連 Compose render 都是本機解析（它會印 LIMITED VERIFICATION）。
 
 所以下面這幾項是人工 gate，每次 release 都要重跑一遍，不能因為 `deploy.sh` 退出 0 就當它們過了。編號與 `deploy.sh` 結束時印的清單相同：
 
@@ -230,6 +230,9 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 | 5 | STT（`[stt].enabled = true` 時才要） | 用真實音檔打一次 `/audio/transcriptions` | 靜態檢查不發請求 |
 | 6 | 模型推論直連公司 gateway | 一個 Slack 問題得到回答，開頭沒有 model metadata warning；一次 shell tool call 可用；同一 thread 第二次 @ 恢復原 session（`session/load`），不是重開 | 離線沒有任何東西能證明 gateway 收這條路由 |
 | 7 | Coding 流程 | 上面「在 Slack 確認」第 7 項：clone、`pnpm install`、`.patch` 上傳到 thread | 需要真的模型、Slack 與網路 |
+| 8 | 自己的瀏覽器 | 請 agent 起某個 repo 的 dev server，用 chrome-devtools 截圖，PNG 出現在 thread | 需要真的模型、Slack 與 Chrome sidecar |
+| 9 | 接同事的瀏覽器（[system-design](system-design.md) 驗收第 20 條） | DM 請 agent 接瀏覽器，照回覆的步驟（裝 cloudflared、跑 `cloudflared access tcp`、在 Playwright Extension 貼 connect 網址）接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址 | 需要真的 Cloudflare quick tunnel、同事的 Chrome 與插件；`deploy.sh` 只驗 cloudflared 版本 |
+| 10 | 操作同事的 Windows 桌面（[system-design](system-design.md) 驗收第 21 條） | 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢 | 需要真的 Windows 桌面與 quick tunnel；`deploy.sh` 只驗 `mcpdo` 跑得起來，接法只在本機用假 MCP server 驗過（[ADR 0015](adr/0015-connect-mid-session-mcp-with-mcpdo.md)） |
 
 第 4 項的指令：
 

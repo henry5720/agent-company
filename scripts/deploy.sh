@@ -6,12 +6,12 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$ROOT/scripts/lib.sh"
 load_env "$ROOT"
 VERSION_FILE="$ROOT/config/versions.env"
-version_keys=(CODEX_VERSION CODEX_ACP_VERSION CODEGRAPH_VERSION)
+version_keys=(CODEX_VERSION CODEX_ACP_VERSION CODEGRAPH_VERSION CLOUDFLARED_VERSION)
 declare -A pinned_versions=()
 [[ -r "$VERSION_FILE" ]] || { printf 'FAIL: missing %s\n' "$VERSION_FILE" >&2; exit 1; }
 while IFS='=' read -r key value; do
   case "$key" in
-    CODEX_VERSION|CODEX_ACP_VERSION|CODEGRAPH_VERSION)
+    CODEX_VERSION|CODEX_ACP_VERSION|CODEGRAPH_VERSION|CLOUDFLARED_VERSION)
       [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
         printf 'FAIL: invalid %s in config/versions.env\n' "$key" >&2
         exit 1
@@ -87,6 +87,10 @@ compose exec -T agent sh -lc \
   'test -w /home/node/.codex && test -r /etc/codex/catalog.json && test ! -w /etc/codex/catalog.json'
 compose exec -T agent sh -lc \
   "codegraph --version | grep -qF '$CODEGRAPH_VERSION'"
+# cloudflared：同事的 Chrome 經插件加一次性 tunnel 接進來時要用。只驗版本，不開 tunnel。
+check_cloudflared_version "$CLOUDFLARED_VERSION" compose exec -T agent cloudflared
+# mcpdo：同事交來 MCP server（windows-mcp）時 agent 用它連。只驗可執行，不連任何 server。
+compose exec -T agent sh -lc "mcpdo --version >/dev/null"
 
 compose ps
 
@@ -100,7 +104,7 @@ cat <<'GATE'
 Deploy finished. What it just verified: the container starts, the pinned codex and
 codex-acp are the ones config/versions.env records, agent-sync synced the provider,
 rules, skills and MCP from agent-config, the Chrome sidecar answers on 127.0.0.1:9222,
-the retired runtimes are gone, the sidecar has its CJK fonts, and home is writable while
+cloudflared is the pinned version, mcpdo runs, the retired runtimes are gone, the sidecar has its CJK fonts, and home is writable while
 the snapshot is not. Preflight also confirmed the R2 host and credentials are present.
 
 NOT VERIFIED HERE — manual release gate, see the "人工 release gate" section of
@@ -120,4 +124,13 @@ docs/runbook.md. Do not call this version released until every line is ticked of
      /home/node/snapshots, runs `pnpm install`, and uploads a .patch to the thread.
   8. Browser: ask the agent to start that repo's dev server and send a screenshot
      taken through chrome-devtools; the PNG lands in the thread.
+  9. Colleague's Chrome over the tunnel, in a DM: following the agent's steps
+     (install cloudflared, run `cloudflared access tcp`, paste the connect URL into the
+     Playwright Extension) connects; two tab-new then tab-list shows 3 tabs; after
+     detach the tunnel URL returns 530 from the internet. The same request in a channel
+     gets "move to DM" and no connect URL appears there.
+ 10. Colleague's Windows desktop, in a DM: given the windows-mcp quick tunnel URL and
+     key, the agent connects with mcpdo and posts a desktop screenshot to the thread;
+     after the colleague stops the server and rotates the key, the URL returns 530 and
+     the old key is dead.
 GATE
