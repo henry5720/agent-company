@@ -66,7 +66,7 @@ Snapshot 是最近同步成功的程式碼，未必等於正式環境。新增 s
 3. 開一支專給它用的 Chrome（獨立 profile，原因見下）：它會附 Windows、macOS、Linux 各一行開法，貼你那個 OS 的就好。第一次開是空的，在這支 Chrome 開 [Playwright Extension 的商店頁](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm)按「加到 Chrome」；
 4. 在這支 Chrome 開新分頁，貼上 connect 網址，在插件畫面選分頁、按允許。
 
-要在約 10 分鐘內做完，逾時它會收掉，再叫一次就好（網址每次不同）。每一步在做什麼、卡住怎麼查，見 [browser.md 的〈tailnet 外：一次性 tunnel〉](https://github.com/henry5720/dotfiles/blob/main/docs/remote-access/browser.md#tailnet-外一次性-tunnel)；卡住時把終端機印出的錯誤和你的 OS 貼給它，它會針對教你。
+要在 1 小時內接上，逾時它會收掉，再叫一次就好（網址每次不同）；接上之後不限時，用完請它 detach。每一步在做什麼、卡住怎麼查，見 [browser.md 的〈tailnet 外：一次性 tunnel〉](https://github.com/henry5720/dotfiles/blob/main/docs/remote-access/browser.md#tailnet-外一次性-tunnel)；卡住時把終端機印出的錯誤和你的 OS 貼給它，它會針對教你。
 
 接上之後它開新分頁做事，不蓋掉你正在看的那頁；每一步你都看得到，要輸入密碼或核准時直接接手。用完它會 detach、收掉 tunnel，網址立刻失效，Chrome 和分頁留著。
 
