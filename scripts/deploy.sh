@@ -124,4 +124,13 @@ docs/runbook.md. Do not call this version released until every line is ticked of
      /home/node/snapshots, runs `pnpm install`, and uploads a .patch to the thread.
   8. Browser: ask the agent to start that repo's dev server and send a screenshot
      taken through chrome-devtools; the PNG lands in the thread.
+  9. Colleague's Chrome over the tunnel, in a DM: following the agent's steps
+     (install cloudflared, run `cloudflared access tcp`, paste the connect URL into the
+     Playwright Extension) connects; two tab-new then tab-list shows 3 tabs; after
+     detach the tunnel URL returns 530 from the internet. The same request in a channel
+     gets "move to DM" and no connect URL appears there.
+ 10. Colleague's Windows desktop, in a DM: given the windows-mcp quick tunnel URL and
+     key, the agent connects with mcpdo and posts a desktop screenshot to the thread;
+     after the colleague stops the server and rotates the key, the URL returns 530 and
+     the old key is dead.
 GATE
