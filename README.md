@@ -28,6 +28,7 @@ Slack
       -> ~/.agents/skills、~/.codex 的 MCP 與 AGENTS.md   agent-sync 用 skillshare 從 agent-config 裝，跟維護者機器同一套
   -> chrome sidecar（共用 localhost）  headless Chrome，127.0.0.1:9222；playwright-cli attach 操作與截圖，chrome-devtools MCP 查問題
   -> 同事的 Chrome（只在 DM，用時才接） Playwright Extension -> 一次性 cloudflared tcp tunnel -> container 裡的 relay
+  -> 同事的 Windows 桌面（只在 DM，用時才接） mcpdo -> 同事開的 quick tunnel -> 他那台的 Windows-MCP
       -> Cloudflare R2 filestore（incoming attachments）
 
 deployment host
@@ -36,7 +37,7 @@ deployment host
   -> 專用 GitHub SSH key，只存在 host
 ```
 
-Container 沒有 GitHub token、SSH key 或 Docker socket。image 裡有 `gh`（官方 image 自帶），但沒有 token，什麼都推不出去。Runtime image 由固定 multi-arch digest 的 OpenAB Codex image 建置，加上固定版本的 Codex CLI、codex-acp、CodeGraph、cloudflared 與 Python 3；版本正本在 [`config/versions.env`](config/versions.env)。
+Container 沒有 GitHub token、SSH key 或 Docker socket。image 裡有 `gh`（官方 image 自帶），但沒有 token，什麼都推不出去。Runtime image 由固定 multi-arch digest 的 OpenAB Codex image 建置，加上固定版本的 Codex CLI、codex-acp、CodeGraph、cloudflared、MCP Inspector（`mcpdo`）與 Python 3；版本正本在 [`config/versions.env`](config/versions.env)。
 
 接受的取捨，照實寫：
 

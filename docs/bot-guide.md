@@ -73,6 +73,24 @@ Snapshot 是最近同步成功的程式碼，未必等於正式環境。新增 s
 
 **接上之後，這個 thread 裡任何人叫助理做事，用的都是你的瀏覽器。** 助理所有對話共用同一個工作區，別的對話也叫得到這條連線。這裡不另加限制：接著的時候看著它做，用完就請它 detach。
 
+## 讓它操作你的 Windows 桌面 app
+
+要助理操作你 Windows 上的桌面 app（截圖、點擊、打字），你在自己的 Windows 起 Windows-MCP，開一個公開網址，把網址和 key 交給它。
+
+**在 DM 叫它**，例如「我要讓你操作我 Windows 上的 ERP，幫我把這張單的欄位填一遍」。在 channel 提出時，它會請你改到 DM：網址加 key 等於你桌面的控制權，DM 的 thread 只有你看得到。
+
+你要做的事，照 [windows-mcp 給人看的說明](https://github.com/henry5720/agent-config/blob/main/docs/skills/windows-mcp.md)走 quick tunnel 那條：
+
+1. 第一次先[裝 Windows-MCP 和 cloudflared](https://github.com/henry5720/agent-config/blob/main/docs/skills/windows-mcp.md#第一次在那台裝-windows-mcp)；
+2. 照[〈quick tunnel：你要貼的〉](https://github.com/henry5720/agent-config/blob/main/docs/skills/windows-mcp.md#quick-tunnel你要貼的)起 server、換 key，再貼助理給你的那行 quick tunnel 指令，開著別關；
+3. 在 DM 交兩樣東西：`https://<隨機>.trycloudflare.com` 那個網址，和剪貼簿裡的 key。
+
+它會先確認網址不帶 key 被擋、帶 key 接得上，再截一張桌面圖回 thread，讓你確認接到的是你那台。接著照你的要求操作；要輸入帳密或驗證碼時它會停下來，由你自己在那台輸入。
+
+**用完一定收掉、換 key。** 跟它說「收掉」，它會先斷線；你照[〈quick tunnel：用完收掉〉](https://github.com/henry5720/agent-config/blob/main/docs/skills/windows-mcp.md#quick-tunnel用完收掉)在那台貼上，停掉 tunnel 和 server、換一把新 key，它再從它那邊確認網址連不上（Cloudflare 回 `530`）。key 是在對話裡交的，會留在 DM 和助理的工作紀錄裡，所以每次都換，下次再起 server 用的是新 key。
+
+**接上期間，助理看得到、也操作得到你整個桌面**：畫面上開著的信箱、聊天、文件都會被截圖拍進去，它也能開 PowerShell。助理所有對話共用同一個工作區，這段期間別的 thread 叫它做事，也接得到你的桌面。這裡不另加限制：開之前關掉不想給它看的視窗，接著的時候看著它做，用完就收。
+
 ## Skills 與原作者教學
 
 Slack Home 保留常用能力與提問範例；[完整 skill 清單與內容](https://github.com/henry5720/agent-config/tree/main/skills)在 agent-config，由 Skillshare 同步到 bot。GitHub 清單可能比 bot 最近同步的版本更新。Skills 提供做事的方法，Home 的例子也不涵蓋所有用途；實際執行仍取決於環境的工具、連線、權限與 bot 規則。

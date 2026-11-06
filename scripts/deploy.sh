@@ -89,6 +89,8 @@ compose exec -T agent sh -lc \
   "codegraph --version | grep -qF '$CODEGRAPH_VERSION'"
 # cloudflared：同事的 Chrome 經插件加一次性 tunnel 接進來時要用。只驗版本，不開 tunnel。
 check_cloudflared_version "$CLOUDFLARED_VERSION" compose exec -T agent cloudflared
+# mcpdo：同事交來 MCP server（windows-mcp）時 agent 用它連。只驗可執行，不連任何 server。
+compose exec -T agent sh -lc "mcpdo --version >/dev/null"
 
 compose ps
 
@@ -102,7 +104,7 @@ cat <<'GATE'
 Deploy finished. What it just verified: the container starts, the pinned codex and
 codex-acp are the ones config/versions.env records, agent-sync synced the provider,
 rules, skills and MCP from agent-config, the Chrome sidecar answers on 127.0.0.1:9222,
-cloudflared is the pinned version, the retired runtimes are gone, the sidecar has its CJK fonts, and home is writable while
+cloudflared is the pinned version, mcpdo runs, the retired runtimes are gone, the sidecar has its CJK fonts, and home is writable while
 the snapshot is not. Preflight also confirmed the R2 host and credentials are present.
 
 NOT VERIFIED HERE — manual release gate, see the "人工 release gate" section of

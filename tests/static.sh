@@ -54,7 +54,7 @@ assert '@sha256:' in versions['OPENAB_IMAGE']
 tag = versions['OPENAB_IMAGE'].split('@', 1)[0].rsplit(':', 1)[-1]
 assert tag not in ('latest', 'beta', 'stable')
 for key in ('CODEX_VERSION', 'CODEX_ACP_VERSION', 'CODEGRAPH_VERSION', 'SKILLSHARE_VERSION', 'PLAYWRIGHT_CLI_VERSION',
-            'CLOUDFLARED_VERSION'):
+            'CLOUDFLARED_VERSION', 'MCP_INSPECTOR_VERSION'):
     assert re.fullmatch(r'\d+\.\d+\.\d+', versions[key]), key
 for key in ('SKILLSHARE_LINUX_AMD64_SHA256', 'SKILLSHARE_LINUX_ARM64_SHA256',
             'CLOUDFLARED_LINUX_AMD64_SHA256', 'CLOUDFLARED_LINUX_ARM64_SHA256'):
@@ -93,6 +93,14 @@ assert 'https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARE
 cf_block = dockerfile[dockerfile.index('cloudflared-linux-${arch}'):]
 assert cf_block.index('sha256sum -c') < cf_block.index('/usr/local/bin/cloudflared'), \
     'cloudflared must be checksum-verified before it is installed'
+# mcpdo（MCP Inspector 的 CLI）：company agent 在 session 中途接同事交來的 MCP server（windows-mcp，#45）。
+# 跟 playwright-cli 一樣固定版本 npm i -g，build 時驗版本、mcpdo 在 PATH 上。理由見 ADR 0015。
+assert 'ARG MCP_INSPECTOR_VERSION\n' in dockerfile
+assert 'npm i -g "@modelcontextprotocol/inspector@${MCP_INSPECTOR_VERSION}"' in dockerfile
+mi_block = dockerfile[dockerfile.index('@modelcontextprotocol/inspector@'):]
+assert '/@modelcontextprotocol/inspector/package.json")" = "$MCP_INSPECTOR_VERSION"' in mi_block.split('\n\n', 1)[0], \
+    'build must verify the installed inspector version'
+assert 'command -v mcpdo' in mi_block.split('\n\n', 1)[0]
 # agent is not root: global npm installs must land in home.
 assert "prefix=/home/node/.local" in dockerfile and 'ENV PATH=/home/node/.local/bin:$PATH' in dockerfile
 
@@ -151,6 +159,8 @@ assert run_loader({'CODEX_VERSION': 'latest'}).returncode != 0, 'a floating vers
 # deploy renders the provider config before the container starts; the mount reads the rendered file.
 # deploy 驗 container 裡的 cloudflared 是版本正本那版；沒裝或版本錯，deploy 失敗。
 assert 'check_cloudflared_version "$CLOUDFLARED_VERSION" compose exec -T agent cloudflared' in deploy
+# deploy 驗 mcpdo 跑得起來（跟 playwright-cli 一樣只驗可執行，版本在 build 時驗過）。
+assert 'compose exec -T agent sh -lc "mcpdo --version >/dev/null"' in deploy
 import tempfile
 with tempfile.TemporaryDirectory() as tmp:
     tmp = pathlib.Path(tmp)
@@ -202,6 +212,7 @@ assert bot['build']['args'] == {
     'CODEGRAPH_VERSION': versions['CODEGRAPH_VERSION'],
     'SKILLSHARE_VERSION': versions['SKILLSHARE_VERSION'],
     'PLAYWRIGHT_CLI_VERSION': versions['PLAYWRIGHT_CLI_VERSION'],
+    'MCP_INSPECTOR_VERSION': versions['MCP_INSPECTOR_VERSION'],
     'SKILLSHARE_LINUX_AMD64_SHA256': versions['SKILLSHARE_LINUX_AMD64_SHA256'],
     'SKILLSHARE_LINUX_ARM64_SHA256': versions['SKILLSHARE_LINUX_ARM64_SHA256'],
     'CLOUDFLARED_VERSION': versions['CLOUDFLARED_VERSION'],

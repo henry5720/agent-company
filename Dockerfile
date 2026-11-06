@@ -7,6 +7,7 @@ ARG CODEX_ACP_VERSION
 ARG CODEGRAPH_VERSION
 ARG SKILLSHARE_VERSION
 ARG PLAYWRIGHT_CLI_VERSION
+ARG MCP_INSPECTOR_VERSION
 ARG SKILLSHARE_LINUX_AMD64_SHA256
 ARG SKILLSHARE_LINUX_ARM64_SHA256
 ARG CLOUDFLARED_VERSION
@@ -31,6 +32,11 @@ RUN npm i -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
 RUN npm i -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}" \
     && test "$(node -p 'require(process.argv[1]).version' "$(npm root -g)/@playwright/cli/package.json")" = "$PLAYWRIGHT_CLI_VERSION" \
     && command -v playwright-cli
+# mcpdo（MCP Inspector 的 CLI）：同事在 DM 交來 MCP server 的網址和 Bearer key（windows-mcp）時，
+# agent 在 session 中途用它連、呼叫 tool。Codex 只在 session 開始時載入 MCP，理由見 ADR 0015。
+RUN npm i -g "@modelcontextprotocol/inspector@${MCP_INSPECTOR_VERSION}" \
+    && test "$(node -p 'require(process.argv[1]).version' "$(npm root -g)/@modelcontextprotocol/inspector/package.json")" = "$MCP_INSPECTOR_VERSION" \
+    && command -v mcpdo
 
 # codex 與 codex-acp 一起裝在獨立 prefix，不用上游 global 裝的那兩個（版本跟 base digest 走）。
 # codex-acp 用 createRequire 解析自己底下的 @openai/codex，所以真正跑哪版 codex 由

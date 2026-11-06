@@ -147,6 +147,8 @@ OpenAB 直接跑 `codex-acp`，初始 mode 是 `agent-full-access`。這是 Open
 
 cloudflared 由 Dockerfile 從 GitHub release 下載固定版本、驗 SHA-256 後裝進 `/usr/local/bin`，deploy 驗 container 裡的版本等於版本正本。
 
+MCP Inspector 以固定版本 `npm i -g`，只用它的 `mcpdo` CLI：同事在 DM 交來的 MCP server（windows-mcp 的公開網址加 Bearer key）由 agent 在 session 中途從 shell 接。Codex 只在 session 開始時載入 MCP、key 也放不進 codex-acp 的 env，MCP tool 回的截圖也不會落成檔案，所以不走 Codex 的 MCP 設定；理由與本機驗證見 [`adr/0015-connect-mid-session-mcp-with-mcpdo.md`](adr/0015-connect-mid-session-mcp-with-mcpdo.md)。build 驗版本，deploy 驗 `mcpdo` 跑得起來。
+
 Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本>`，build 時驗 exact version；上游 image 自帶的那兩個不用。Codex 的 model catalog 是 [`config/codex/catalog.json`](../config/codex/catalog.json)，升級 Codex 時要重產，parse 失敗 Codex 整個起不來。
 
 所有版本與 OpenAB immutable image digest 集中在 [`config/versions.env`](../config/versions.env)；`compose.yaml` 使用 checked-in build args，因此 `docker compose` 可直接 render。
@@ -211,6 +213,7 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
 18. Deployment host 的 crontab 有 `# agent-company-artifact-cleanup` entry，每小時執行 `scripts/cleanup-artifacts.sh`，它在 container 內跑 `slack-list cleanup`；container 沒在跑時這一輪失敗會寫進 `artifact-cleanup.log` 並回非零。排程存在由 `tests/static.sh` render `render_crontab` 驗；cron 真的觸發過只能人工確認。
 19. `tests/static.sh` 與 `scripts/deploy.sh` 都不聲稱驗過 Slack、公司 gateway、STT 或 cron 觸發；`deploy.sh` 結束時印出未驗清單，對應 [`runbook.md`](runbook.md#人工-release-gate) 的「人工 release gate」。
 20. 同事在 DM 請 agent 接他的瀏覽器，照回覆的三步（裝 cloudflared、跑 `cloudflared access tcp`、在 Playwright Extension 貼 connect 網址）就接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址。只能人工驗收；cloudflared 版本由 `deploy.sh` 驗。
+21. 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢。只能人工驗收；`mcpdo` 跑得起來由 `deploy.sh` 驗，接法在本機用假 MCP server 驗過（ADR 0015）。
 
 ## 人工前置作業
 

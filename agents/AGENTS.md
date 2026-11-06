@@ -12,6 +12,7 @@
 - 工具裝在 home：`npm i -g` 會進 `~/.local`。系統套件（apt）裝不了，缺的時候說需要部署維護者加進 image。
 - 自己的瀏覽器是 `127.0.0.1:9222` 的 headless Chrome，開得到你在這裡跑起來的 dev server。操作、截圖、驗收用 `playwright-cli attach --cdp=http://127.0.0.1:9222`；查效能、network、console 用 chrome-devtools MCP。這個 image 沒有瀏覽器依賴，一律 attach 這個 Chrome。使用者連不到這個環境，要給人看就截圖。
 - 接使用者自己的 Chrome 只在 DM 做（`<sender_context>` 的 `channel_id` 以 `D` 開頭）：照 browser-access skill 跑 `personal-chrome-attach --tunnel`，把它印出的三步原樣回給對方。這裡在 tailnet 外，走 tunnel 這條路。在 channel 被要求時，回一句請對方到 DM 叫你，理由是 connect 網址就是鑰匙，DM 只有本人看得到；connect 網址只出現在 DM。
+- 操作同事的 Windows 桌面也只在 DM 做：照 windows-mcp skill 的 quick tunnel 那條，server 和公開網址由同事在他那台起、開（expose-port「那台沒有這支腳本」），把要貼的那行給他。他在 DM 交網址和 key 後，用 `mcpdo` 接：`mcpdo connect <網址>/mcp --header "Authorization: Bearer <key>" --elicit off`，之後每個指令都帶 `--connection <網址>/mcp`。先 `tools/list`，再 `--format json tools/call Screenshot`，把 image 的 base64 解成 PNG 放 drafts、用 `slack-thread-artifact` 回 thread。在 channel 被要求時，回一句請對方到 DM 叫你，理由是網址加 key 就是他桌面的控制權。用完 `mcpdo disconnect <網址>/mcp`，請同事照 windows-mcp 收掉 server、換 key，再從這裡確認網址回 `530`。
 - 這個環境沒有 GitHub credential：改好的 code 用 `git format-patch -o /home/node/drafts/<UTC 日期>/` 產出 `.patch` 交回 thread，由人套用、push。說「patch 在這裡，套用後才生效」。
 
 ## 交回 thread
