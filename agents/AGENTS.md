@@ -11,8 +11,11 @@
 - 要改 code：`git clone /home/node/snapshots/<repo> /home/node/<目錄>/<repo>`，在副本裡改、裝、跑。home 可寫、重啟後還在，所有 thread 共用：只動自己建的目錄，用完清掉大目錄。
 - 工具裝在 home：`npm i -g` 會進 `~/.local`。系統套件（apt）裝不了，缺的時候說需要部署維護者加進 image。
 - 自己的瀏覽器是 `127.0.0.1:9222` 的 headless Chrome，開得到你在這裡跑起來的 dev server。操作、截圖、驗收用 `playwright-cli attach --cdp=http://127.0.0.1:9222`；查效能、network、console 用 chrome-devtools MCP。這個 image 沒有瀏覽器依賴，一律 attach 這個 Chrome。使用者連不到這個環境，要給人看就截圖。
-- 接同事的 Chrome 或 Windows 桌面都在 DM 做（`<sender_context>` 的 `channel_id` 以 `D` 開頭）：交出去的網址和 key 就是他瀏覽器或桌面的控制權，DM 只有本人看得到。在 channel 被要求時，回一句請對方到 DM 叫你，網址和 key 只出現在 DM。同事卡住時，先問他用什麼 OS、畫面印出了什麼錯誤，再針對那一步教。
-  - 瀏覽器：照 browser-access skill 跑 `personal-chrome-attach --tunnel`，把它印出的步驟原樣回給對方。這裡在 tailnet 外，走 tunnel 這條路。
+- 接同事的 Chrome 或 Windows 桌面都在 DM 做：交出去的網址和 key 就是他瀏覽器或桌面的控制權，DM 只有本人看得到。照順序：
+  1. 先看本次 `<sender_context>` 的 `channel_id`。以 `D` 開頭才是 DM，往下做。
+  2. 不是 `D` 開頭（channel）：這一輪只回一句「這個要在 DM 做，請私訊我再說一次」，然後結束這一輪。不讀 skill、不跑指令、不開 tunnel。
+  3. DM 裡照下面兩項做。同事卡住時，先問他用什麼 OS、畫面印出了什麼錯誤，再針對那一步教。
+  - 瀏覽器：照 browser-access skill 跑 `personal-chrome-attach --tunnel`（用 skill 資料夾裡 `scripts/` 的絕對路徑，見 skill），把它印出的步驟原樣回給對方。這裡在 tailnet 外，走 tunnel 這條路；cloudflared、playwright-cli 都已裝在 image。
   - Windows 桌面：照 windows-mcp skill 的 quick tunnel 那條，server 和公開網址由同事在他那台起、開（expose-port「那台沒有這支腳本」），把要貼的那行給他。他交來網址和 key 後，用 `mcpdo` 接：`mcpdo connect <網址>/mcp --header "Authorization: Bearer <key>" --elicit off`，之後每個指令都帶 `--connection <網址>/mcp`。先 `tools/list`，再 `--format json tools/call Screenshot`，把 image 的 base64 解成 PNG 放 drafts、用 `slack-thread-artifact` 回 thread。用完 `mcpdo disconnect <網址>/mcp`，請同事照 windows-mcp 收掉 server、換 key，再從這裡確認網址回 `530`。
 - 這個環境沒有 GitHub credential：改好的 code 用 `git format-patch -o /home/node/drafts/<UTC 日期>/` 產出 `.patch` 交回 thread，由人套用、push。說「patch 在這裡，套用後才生效」。
 
