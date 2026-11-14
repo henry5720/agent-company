@@ -298,7 +298,7 @@ tail -n 50 "${XDG_STATE_HOME:-$HOME/.local/state}/agent-company/browser-reap.log
 REAP_DRY_RUN=1 ./scripts/reap-browser-tabs.sh
 ```
 
-它只關 default context 的分頁：每小時記一次網址，同一個分頁連續 4 小時沒變才關，第一次跑不會關任何分頁。thread 的 isolated context 由 playwright-cli 自己收（`close`，或閒置 `PLAYWRIGHT_MCP_IDLE_TIMEOUT` 後 detach），這支不碰。整個 Chrome 要清空就 `docker compose -f ./compose.yaml restart chrome`：profile 在 tmpfs，重啟後所有分頁與登入都會消失，正在用瀏覽器的 thread 要重新 attach。
+它只關 default context 的分頁：每小時記一次網址，同一個分頁連續 4 小時沒變才關，第一次跑不會關任何分頁。Chrome 完全沒有分頁時 attach 會在 default context 補一個 `about:blank`，它也照這條規則在 4 小時後收掉。thread 的 isolated context 由 playwright-cli 自己收（`close`，或閒置 `PLAYWRIGHT_MCP_IDLE_TIMEOUT` 後 detach），這支不碰。整個 Chrome 要清空就 `docker compose -f ./compose.yaml restart chrome`：profile 在 tmpfs，重啟後所有分頁與登入都會消失，正在用瀏覽器的 thread 要重新 attach。
 
 `update-snapshots.sh` 同步完會用 runtime image 重建 CodeGraph 索引，所以 host 不需要安裝 Node。索引放在 `$SNAPSHOT_ROOT/.index/<repo>`，每個 snapshot 內的 `.codegraph-company` 是指過去的相對 symlink。索引容器與 agent 都設定 `CODEGRAPH_DIR=.codegraph-company`，保留 repo 原有的 `.codegraph` 檔案。image 還沒 build 時那一輪的索引會被跳過並印出訊息，`deploy.sh` 之後再跑一次同步即可。image 已存在但索引失敗時，同步會回非零狀態，不會宣稱同步成功。
 
@@ -361,7 +361,9 @@ git pull --ff-only
 ./scripts/install-sync-cron.sh   # 加上 # agent-company-browser-reap
 ./scripts/deploy.sh
 docker compose -f ./compose.yaml restart agent chrome   # OpenAB 只在啟動時讀 config/openab.toml
-docker compose -f ./compose.yaml exec agent sh -lc 'tr "\0" "\n" < /proc/$(pgrep -o -f codex-acp)/environ | grep PLAYWRIGHT_MCP_IDLE_TIMEOUT'
+# codex-acp 要等第一個 session 才會起：先在 Slack 對 bot 發一則訊息，再跑這行。
+# pattern 錨在 `^node`，不然 pgrep 會比對到這行 sh 自己。
+docker compose -f ./compose.yaml exec agent sh -lc 'tr "\0" "\n" < /proc/$(pgrep -o -f "^node /usr/local/bin/codex-acp")/environ | grep PLAYWRIGHT_MCP_IDLE_TIMEOUT'
 ```
 
 最後一行要印出 `PLAYWRIGHT_MCP_IDLE_TIMEOUT=14400000`。重啟會中斷正在進行的 thread；下一次 @ 會用 `session/load` 接回，但瀏覽器要重新 attach。
