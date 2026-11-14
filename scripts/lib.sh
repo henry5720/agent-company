@@ -19,26 +19,31 @@ load_env() {
   done < "$root/.env"
 }
 
-# The deployment host's two scheduled jobs. Both markers are grep targets, so a
+# The deployment host's scheduled jobs. Every marker is a grep target, so a
 # reinstall rewrites our own lines and leaves every other crontab entry alone.
 CRON_MARKER_SYNC='# agent-company-snapshots'
 CRON_MARKER_CLEANUP='# agent-company-artifact-cleanup'
+CRON_MARKER_BROWSER='# agent-company-browser-reap'
 
 # Print the crontab lines the host is supposed to run. install-sync-cron.sh pipes
 # this into `crontab -`; tests/static.sh renders it to prove the artifact cleanup
-# is actually scheduled rather than only described in the docs. Keeping one
-# renderer means the tested text is the installed text.
+# and the browser reap are actually scheduled rather than only described in the
+# docs. Keeping one renderer means the tested text is the installed text.
 #
-# Cleanup runs at :17 so it does not land on the sync run at :00, which rebuilds
-# the CodeGraph indexes with a docker run and is the heavy job of the hour.
+# Cleanup runs at :17 and the browser reap at :37 so neither lands on the sync run
+# at :00, which rebuilds the CodeGraph indexes with a docker run and is the heavy
+# job of the hour.
 render_crontab() {
   local root=$1 snapshot_root=$2
   local sync_schedule=${3:-0 * * * *}
   local cleanup_schedule=${4:-17 * * * *}
+  local browser_schedule=${5:-37 * * * *}
   printf '%s SNAPSHOT_ROOT=%q %q %s\n' \
     "$sync_schedule" "$snapshot_root" "$root/scripts/update-snapshots.sh" "$CRON_MARKER_SYNC"
   printf '%s %q %s\n' \
     "$cleanup_schedule" "$root/scripts/cleanup-artifacts.sh" "$CRON_MARKER_CLEANUP"
+  printf '%s %q %s\n' \
+    "$browser_schedule" "$root/scripts/reap-browser-tabs.sh" "$CRON_MARKER_BROWSER"
 }
 
 # Codex 的 provider 設定不讀 env，所以 deploy 時把 gateway 位址填進範本。Key 不寫進檔案：

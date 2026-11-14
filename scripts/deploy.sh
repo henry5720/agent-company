@@ -133,4 +133,8 @@ docs/runbook.md. Do not call this version released until every line is ticked of
      key, the agent connects with mcpdo and posts a desktop screenshot to the thread;
      after the colleague stops the server and rotates the key, the URL returns 530 and
      the old key is dead.
+ 11. Browser reclaim: two threads each open a tab; the second thread does not inherit
+     the first one's login; after `close` the thread's context and tabs are gone; then
+     `./scripts/reap-browser-tabs.sh` by hand, confirm the crontab entry exists and its
+     log has no FAILED line.
 GATE

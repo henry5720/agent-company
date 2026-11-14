@@ -159,14 +159,15 @@ $EDITOR env/openab.env
 docker compose -f ./compose.yaml logs --tail=100 agent
 ```
 
-`install-sync-cron.sh` 會建立 snapshot root 與 `$XDG_STATE_HOME/agent-company`、寫入**兩個**每小時的 crontab entry，並跑第一次同步：
+`install-sync-cron.sh` 會建立 snapshot root 與 `$XDG_STATE_HOME/agent-company`、寫入**三個**每小時的 crontab entry，並跑第一次同步：
 
 | Marker | 時間 | 做什麼 |
 |---|---|---|
 | `# agent-company-snapshots` | 每小時 :00 | `scripts/update-snapshots.sh`：同步 snapshot、重建 CodeGraph 索引 |
 | `# agent-company-artifact-cleanup` | 每小時 :17 | `scripts/cleanup-artifacts.sh`：在 container 內跑 `slack-list cleanup` |
+| `# agent-company-browser-reap` | 每小時 :37 | `scripts/reap-browser-tabs.sh`：關掉 Chrome default context 裡 4 小時沒換網址的分頁 |
 
-兩行都由 `scripts/lib.sh` 的 `render_crontab` 產生，`tests/static.sh` 會 render 同一個函式來確認 cleanup 真的有排程。上傳失敗的 artifact 是刻意留在 drafts 的，第二行是唯一會把它們收掉的東西；只裝第一行的 host 會讓 drafts 無限長大。crontab 裡寫的是 script 的絕對路徑，checkout 搬家後要重跑 `install-sync-cron.sh`。
+三行都由 `scripts/lib.sh` 的 `render_crontab` 產生，`tests/static.sh` 會 render 同一個函式來確認三行都有排程。上傳失敗的 artifact 是刻意留在 drafts 的，第二行是唯一會把它們收掉的東西；只裝第一行的 host 會讓 drafts 無限長大。crontab 裡寫的是 script 的絕對路徑，checkout 搬家後要重跑 `install-sync-cron.sh`。
 
 保留期限是 24 小時，但檢查每小時才一次，所以實際壽命是 **24 到 25 小時**，不是剛好 24。
 
@@ -233,6 +234,7 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 | 8 | 自己的瀏覽器 | 請 agent 起某個 repo 的 dev server，用 chrome-devtools 截圖，PNG 出現在 thread | 需要真的模型、Slack 與 Chrome sidecar |
 | 9 | 接同事的瀏覽器（[system-design](system-design.md) 驗收第 20 條） | DM 請 agent 接瀏覽器，照回覆的步驟（裝 cloudflared、跑 `cloudflared access tcp`、在 Playwright Extension 貼 connect 網址）接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址 | 需要真的 Cloudflare quick tunnel、同事的 Chrome 與插件；`deploy.sh` 只驗 cloudflared 版本 |
 | 10 | 操作同事的 Windows 桌面（[system-design](system-design.md) 驗收第 21 條） | 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢 | 需要真的 Windows 桌面與 quick tunnel；`deploy.sh` 只驗 `mcpdo` 跑得起來，接法只在本機用假 MCP server 驗過（[ADR 0015](adr/0015-connect-mid-session-mcp-with-mcpdo.md)） |
+| 11 | 瀏覽器回收（[system-design](system-design.md) 驗收第 22 條） | 兩個 thread 各開一個分頁：第二個 thread 沒有第一個的登入；`close` 後該 thread 的 context 與分頁消失；再手動跑 `./scripts/reap-browser-tabs.sh`，確認 crontab entry 存在、log 沒有 `FAILED` | 需要真的模型與 Slack thread；閒置 detach 只在 sidecar 上用短 timeout 實測過（[ADR 0016](adr/0016-reclaim-browser-tabs-by-idleness.md)） |
 
 第 4 項的指令：
 
@@ -288,6 +290,16 @@ tail -n 50 "${XDG_STATE_HOME:-$HOME/.local/state}/agent-company/artifact-cleanup
 
 `cleanup-artifacts.sh` 自己不刪檔，它在 container 內執行 `/home/node/snapshots/agent-config/skills/slack-list/scripts/slack-list cleanup`——刪除規則的正本在 agent-config。drafts 在 home volume 裡，host 不要繞過這支去刪。log 裡出現 `FAILED` 就是那一輪沒清到（多半是 container 沒在跑），artifact 會留到下一輪；持續 FAILED 要當成待處理，不是雜訊。
 
+查看或立即執行瀏覽器分頁回收（`REAP_DRY_RUN=1` 只列出會關哪些，不關也不記錄）：
+
+```bash
+crontab -l | grep agent-company-browser-reap
+tail -n 50 "${XDG_STATE_HOME:-$HOME/.local/state}/agent-company/browser-reap.log"
+REAP_DRY_RUN=1 ./scripts/reap-browser-tabs.sh
+```
+
+它只關 default context 的分頁：每小時記一次網址，同一個分頁連續 4 小時沒變才關，第一次跑不會關任何分頁。thread 的 isolated context 由 playwright-cli 自己收（`close`，或閒置 `PLAYWRIGHT_MCP_IDLE_TIMEOUT` 後 detach），這支不碰。整個 Chrome 要清空就 `docker compose -f ./compose.yaml restart chrome`：profile 在 tmpfs，重啟後所有分頁與登入都會消失，正在用瀏覽器的 thread 要重新 attach。
+
 `update-snapshots.sh` 同步完會用 runtime image 重建 CodeGraph 索引，所以 host 不需要安裝 Node。索引放在 `$SNAPSHOT_ROOT/.index/<repo>`，每個 snapshot 內的 `.codegraph-company` 是指過去的相對 symlink。索引容器與 agent 都設定 `CODEGRAPH_DIR=.codegraph-company`，保留 repo 原有的 `.codegraph` 檔案。image 還沒 build 時那一輪的索引會被跳過並印出訊息，`deploy.sh` 之後再跑一次同步即可。image 已存在但索引失敗時，同步會回非零狀態，不會宣稱同步成功。
 
 查看 home 用了多少空間（home 沒有自動清理，clone 與套件快取會累積）：
@@ -340,7 +352,30 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/work-agent"
 
 `runtime/openab` 與 `runtime/drafts` 是舊版的 OpenAB state 與 artifact 暫存 bind mount；新版這兩樣都在 home volume 裡。舊 drafts 裡若還有沒上傳的檔，先確認不需要再刪。
 
+### 啟用瀏覽器回收（一次性，[ADR 0016](adr/0016-reclaim-browser-tabs-by-idleness.md)）
+
+這一版之前起的 playwright-cli daemon 沒有閒置逾時，分頁也都在 default context。部署後把 agent 與 Chrome 各重啟一次，讓所有 daemon 都帶新的 `PLAYWRIGHT_MCP_IDLE_TIMEOUT`、sidecar 從空的開始：
+
+```bash
+git pull --ff-only
+./scripts/install-sync-cron.sh   # 加上 # agent-company-browser-reap
+./scripts/deploy.sh
+docker compose -f ./compose.yaml restart agent chrome   # OpenAB 只在啟動時讀 config/openab.toml
+docker compose -f ./compose.yaml exec agent sh -lc 'tr "\0" "\n" < /proc/$(pgrep -o -f codex-acp)/environ | grep PLAYWRIGHT_MCP_IDLE_TIMEOUT'
+```
+
+最後一行要印出 `PLAYWRIGHT_MCP_IDLE_TIMEOUT=14400000`。重啟會中斷正在進行的 thread；下一次 @ 會用 `session/load` 接回，但瀏覽器要重新 attach。
+
+2026-11-05 有一個 thread 自己用 cloudflared 把 sidecar 的 `show` dashboard 開到公網，留下 `/home/node/browser-share-*`（含 cloudflared binary 與密碼檔）。process 已不在，順手確認並清掉（`pgrep` 只在有 DM 正在接同事的瀏覽器時才會列出 cloudflared）：
+
+```bash
+docker compose -f ./compose.yaml exec agent sh -lc 'pgrep -a cloudflared; ls -d /home/node/browser-share-* 2>/dev/null'
+docker compose -f ./compose.yaml exec agent sh -lc 'rm -rf /home/node/browser-share-*'
+```
+
 ### 升級版本
+
+升級 playwright-cli（`PLAYWRIGHT_CLI_VERSION`）時，照 ADR 0016 重驗：閒置計時每個指令重算、閒置 detach 與 `close` 都關掉 isolated context。
 
 版本正本只有 `config/versions.env` 一份，每一項的升級規則寫在該檔註解。`compose.yaml` 的 build args 要同步改成相同的值。
 

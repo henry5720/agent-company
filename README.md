@@ -1,6 +1,16 @@
 # agent-company
 
-在一台 Linux deployment host 上部署公司 Slack 上共用的 coding agent。OpenAB 接 Slack Socket Mode，agent 用定期同步的唯讀 repo snapshot 回答產品問題、讀寫 Slack 待辦；需要改 code 時 clone 一份到自己的 home 修改、安裝、跑測試，再把 `.patch` 傳回 Slack thread。它送不回 GitHub，container 裡沒有任何 GitHub credential。
+把三個上游組成公司 Slack 上共用的 coding agent，部署在一台 Linux deployment host：
+
+| 上游 | 給什麼 | 改它的地方 |
+|---|---|---|
+| [OpenAB](https://github.com/openabdev/openab) 官方 Codex 部署 | harness：接 Slack、管 session、跑 Codex | 跟官方一致優先，偏離要寫 ADR |
+| [agent-config](https://github.com/henry5720/agent-config) | skills、MCP、規則（跟維護者機器同一套） | agent-config |
+| [`config/repos.conf`](config/repos.conf) 的 repo snapshots | 產品參考：唯讀，每小時同步 | 各產品 repo |
+
+這個 repo 只放把它們組起來的設定，和 bot 跟維護者機器不同的地方。agent 能做什麼、怎麼做，屬於 agent-config 的 skill 與 SOP，不在這裡另加限制。
+
+組起來的結果：agent 用 snapshot 回答產品問題、讀寫 Slack 待辦；需要改 code 時 clone 一份到自己的 home 修改、安裝、跑測試，再把 `.patch` 傳回 Slack thread。它送不回 GitHub，container 裡沒有任何 GitHub credential。
 
 形狀照 OpenAB 官方的 Codex 部署：一個 container、可寫的 home、直連公司 gateway。理由見 [ADR 0012](docs/adr/0012-follow-the-official-openab-codex-deployment.md)。
 
@@ -27,6 +37,7 @@ Slack
       -> /home/node/snapshots/.index  CodeGraph 索引，可寫
       -> ~/.agents/skills、~/.codex 的 MCP 與 AGENTS.md   agent-sync 用 skillshare 從 agent-config 裝，跟維護者機器同一套
   -> chrome sidecar（共用 localhost）  headless Chrome，127.0.0.1:9222；playwright-cli attach 操作與截圖，chrome-devtools MCP 查問題
+                                      每個 thread 一個 isolated context，閒置 4 小時自動收（ADR 0016）
   -> 同事的 Chrome（只在 DM，用時才接） Playwright Extension -> 一次性 cloudflared tcp tunnel -> container 裡的 relay
   -> 同事的 Windows 桌面（只在 DM，用時才接） mcpdo -> 同事開的 quick tunnel -> 他那台的 Windows-MCP
       -> Cloudflare R2 filestore（incoming attachments）
@@ -34,6 +45,7 @@ Slack
 deployment host
   -> crontab 每小時 fetch/reset snapshots，再用 runtime image 重建索引，最後在 bot 裡跑 agent-sync
   -> crontab 每小時清掉上傳失敗、超過 24 小時的 artifact
+  -> crontab 每小時關掉 Chrome default context 裡 4 小時沒換網址的分頁
   -> 專用 GitHub SSH key，只存在 host
 ```
 
@@ -43,6 +55,7 @@ Container 沒有 GitHub token、SSH key 或 Docker socket。image 裡有 `gh`（
 
 - Slack bot token、公司 gateway key 與 agent 執行的 repo code（含第三方套件的 install script）在同一個 container。沒有 broker、proxy 或 token 隔離。
 - home 沒有自動清理，clone 與套件快取會累積。
+- 瀏覽器照閒置回收：thread 閒置 4 小時再用瀏覽器，要重新 attach、重新登入；登入不跨 thread 共用。理由見 [ADR 0016](docs/adr/0016-reclaim-browser-tabs-by-idleness.md)。
 - dev server 只在 container 內看得到，要給人看就截圖。預覽網址之後另做。
 - 同事的 Chrome 經插件加一次性 tunnel 接進來：同事在 DM 請 agent 接他的瀏覽器，agent 用 image 裡固定版本的 cloudflared 開一條 tcp quick tunnel，同事在自己的電腦跑一行 `cloudflared access tcp`、在插件按允許。connect 網址就是鑰匙，所以只在 DM 交付；用完 tunnel 收掉、網址失效。Chrome sidecar 照舊不開給任何人。使用方式見[使用指南](docs/bot-guide.md#接你自己的瀏覽器)，設計見 [#43](https://github.com/henry5720/agent-company/issues/43)。
 
@@ -91,8 +104,9 @@ R2 bucket 必須手動設定 `incoming/` prefix 的 **1 天 lifecycle expiration
 - `scripts/preflight.sh`：部署前檢查 secrets、版本、Codex 設定與 snapshot 狀態。
 - `scripts/deploy.sh`：產生 Codex 設定、build、啟動，驗 container 內的版本與權限，最後印出人工 release gate。
 - `scripts/update-snapshots.sh`：host 端 clone/fetch/reset，並重建 CodeGraph 索引。
-- `scripts/install-sync-cron.sh`：寫入兩個每小時的 crontab entry（snapshot 同步、artifact cleanup）並跑第一次同步。
+- `scripts/install-sync-cron.sh`：寫入三個每小時的 crontab entry（snapshot 同步、artifact cleanup、瀏覽器分頁回收）並跑第一次同步。
 - `scripts/cleanup-artifacts.sh`：cron 呼叫的那一支，在 container 內執行 `slack-list cleanup`。
+- `scripts/reap-browser-tabs.sh`：cron 呼叫，在 container 內跑 `reap-browser-tabs.mjs`，關掉 default context 裡 4 小時沒換網址的分頁。
 - `scripts/publish-slack-home.sh`：對 workspace 成員逐一發布 Slack Home view。
 - `tests/static.sh`：靜態檢查，並跑三支 mocked 測試（`image-runtime.py`、`slack-thread-artifact.py`、`artifact-path-safety.py`）。
 

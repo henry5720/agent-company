@@ -73,6 +73,8 @@ assert agent_env == {
     'CODEX_PATH': CODEX_PATH,
     'INITIAL_AGENT_MODE': 'agent-full-access',
     'CODEX_INTERNAL_ORIGINATOR_OVERRIDE': 'codex_exec',
+    # attach 預設永不 detach；跟 [pool] session_ttl_hours 同一個閒置時間（ADR 0016）。
+    'PLAYWRIGHT_MCP_IDLE_TIMEOUT': str(cfg['pool']['session_ttl_hours'] * 3600 * 1000),
 }, agent_env
 
 dockerfile = (root / 'Dockerfile').read_text()
@@ -302,7 +304,45 @@ with tempfile.TemporaryDirectory() as tmp:
 # 改名前的 crontab 標記在重裝時要一起拿掉，不然新舊排程同時跑。
 cron_installer = (root / 'scripts/install-sync-cron.sh').read_text()
 assert "'# work-agent-snapshots'" in cron_installer and "'# work-agent-artifact-cleanup'" in cron_installer
+
+# 排程要真的被寫進去，不是只寫在文件裡：render 安裝時用的同一個函式。
+cron = subprocess.run(
+    ['bash', '-c', 'source "$1/scripts/lib.sh"; render_crontab "$1" /snap',
+     'test', str(root)], capture_output=True, text=True, check=True).stdout.splitlines()
+expected = {
+    '# agent-company-snapshots': ('0 * * * *', 'scripts/update-snapshots.sh'),
+    '# agent-company-artifact-cleanup': ('17 * * * *', 'scripts/cleanup-artifacts.sh'),
+    '# agent-company-browser-reap': ('37 * * * *', 'scripts/reap-browser-tabs.sh'),
+}
+assert len(cron) == len(expected), cron
+for marker, (schedule, script) in expected.items():
+    line = next((l for l in cron if l.endswith(marker)), None)
+    assert line and line.startswith(schedule + ' ') and str(root / script) in line, (marker, cron)
+    assert os.access(root / script, os.X_OK), f'{script} must be executable'
+for var in ('$CRON_MARKER_SYNC', '$CRON_MARKER_CLEANUP', '$CRON_MARKER_BROWSER'):
+    assert cron_installer.count(f'"{var}"') == 2, f'install-sync-cron.sh must strip and list {var}'
 PY
+
+# 分頁回收的判斷規則：網址連續 IDLE 不變才關，換過網址就重新計時，消失的分頁不留在 state。
+if command -v node >/dev/null 2>&1; then
+  REAP_BROWSER_TABS_TEST=1 node --input-type=module -e "
+    import assert from 'node:assert/strict';
+    const { decide } = await import('$ROOT/scripts/reap-browser-tabs.mjs');
+    const H = 3600e3, now = 10 * H;
+    const state = { a: { url: 'x', since: now - 4 * H }, b: { url: 'old', since: now - 9 * H },
+                    c: { url: 'y', since: now - H }, gone: { url: 'z', since: 0 } };
+    const pages = [{ targetId: 'a', url: 'x' }, { targetId: 'b', url: 'new' },
+                   { targetId: 'c', url: 'y' }, { targetId: 'd', url: 'w' }];
+    const { next, close } = decide(state, pages, now, 4 * H);
+    assert.deepEqual(close.map((p) => p.targetId), ['a']);
+    assert.deepEqual(Object.keys(next).sort(), ['b', 'c', 'd']);
+    assert.equal(next.b.since, now);
+    assert.equal(next.c.since, now - H);
+    assert.deepEqual(decide({}, pages, now, 4 * H).close, []);
+  "
+else
+  limited 'reap-browser-tabs.mjs decision rule (node unavailable)'
+fi
 
 grep -Fq 'allow_all_users = true' "$ROOT/config/openab.toml"
 grep -Fq 'WORK_HELPER_ISSUE_MODE=manual' "$ROOT/env/openab.env.example"

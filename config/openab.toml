@@ -25,7 +25,10 @@ streaming = false
 [agent]
 command = "codex-acp"
 working_dir = "/home/node"
-env = { CODEX_HOME = "/home/node/.codex", CODEX_PATH = "/opt/codex-0.166.0/node_modules/.bin/codex", INITIAL_AGENT_MODE = "agent-full-access", CODEX_INTERNAL_ORIGINATOR_OVERRIDE = "codex_exec" }
+# PLAYWRIGHT_MCP_IDLE_TIMEOUT：`playwright-cli attach` 預設永不 detach，session 收掉後 daemon 被 tini
+# 收養、分頁留在 sidecar。設了之後閒置 4 小時（跟 [pool] session_ttl_hours 一樣，每個指令重新計時）
+# 自動 detach，並關掉它開的 isolated context。理由見 docs/adr/0016-reclaim-browser-tabs-by-idleness.md。
+env = { CODEX_HOME = "/home/node/.codex", CODEX_PATH = "/opt/codex-0.166.0/node_modules/.bin/codex", INITIAL_AGENT_MODE = "agent-full-access", CODEX_INTERNAL_ORIGINATOR_OVERRIDE = "codex_exec", PLAYWRIGHT_MCP_IDLE_TIMEOUT = "14400000" }
 inherit_env = [
   "COMPANY_GATEWAY_API_KEY",
   "COMPANY_GATEWAY_BASE_URL",
