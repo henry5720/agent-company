@@ -1,8 +1,13 @@
 # agent-company
 
-這個 repo 部署 Slack 上多人共用的 company agent：OpenAB 轉接 Codex，拿公司產品 repo 的唯讀
-snapshot 回答產品問題、讀寫 Slack 待辦，需要時 clone 一份來改、跑，再把 patch 或截圖交回 thread。
-GitHub 寫入與 issue 留在 local。
+這個 repo 是組裝層：把 OpenAB（harness）、agent-config（skills、MCP、規則）、repo snapshots（產品參考）
+組成 Slack 上多人共用的 company agent。定位見 `README.md` 開頭。
+
+改動前先判斷它屬於哪一層：
+
+- agent 的能力、做事的 SOP、skill、MCP → agent-config，不在這裡另加限制或另抄一份。
+- harness 行為（session、Slack、ACP）→ 照 OpenAB 官方；偏離要有理由並寫 ADR。
+- 只有「怎麼組起來」與「bot 跟維護者機器不同的地方」放這裡：image、mount、資源、排程、`agents/AGENTS.md`。
 
 ## 先讀
 
@@ -34,7 +39,7 @@ GitHub 寫入與 issue 留在 local。
 | 生圖／改圖能力邊界 | `agents/bin/company-image`（改介面等於改能力） |
 | 檔案回 thread 的格式與路徑 | `agents/bin/slack-thread-artifact` |
 | Snapshot remote 與基準 branch | `config/repos.conf` |
-| Host 排程（snapshot 同步、artifact cleanup） | `scripts/lib.sh` 的 `render_crontab` |
+| Host 排程（snapshot 同步、artifact cleanup、瀏覽器分頁回收） | `scripts/lib.sh` 的 `render_crontab` |
 | PM 在 Slack Home 看到的能力說明 | `config/slack-home.json`（改 `repos.conf` 或 bot 能力要一起看這份） |
 | Skill、MCP 與個人規則 | `agent-config`（public repo；bot 與維護者機器共用） |
 | Deployment host 操作步驟 | `docs/runbook.md` |
@@ -53,6 +58,7 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 - Repo snapshot 以單一 mount 掛成 `/home/node/snapshots`，唯讀；`/home/node/snapshots/.index`（CodeGraph 索引）可寫，由 host 維護。agent 改 code 一律 clone 到 home。
 - `~/.codex/config.toml` 由 `agent-sync` 管：只換 provider 段、保留 skillshare 寫的 `[mcp_servers.*]`。整份覆蓋會讓 skillshare 判定被別人改過而拒絕同步。不要把它改回唯讀 mount。
 - `chrome` sidecar（OpenAB `docs/sidecar.md` 的模式）跟 agent 共用 localhost，Chrome 聽 `127.0.0.1:9222`，讓 agent-config `mcp.yaml` 的 chrome-devtools 設定原樣可用。sidecar 不放 token、不掛 volume。兩者都加入只持有網路的 `net`（k8s pause container）；不要改成 `network_mode: service:agent`，那樣 agent 一重啟 Chrome 就斷線。
+- `config/openab.toml` 給 codex-acp 加 `PLAYWRIGHT_MCP_IDLE_TIMEOUT`，跟 `session_ttl_hours` 同一個閒置時間，host 再加一支 `reap-browser-tabs.sh` 兜底 default context。少了它們，`playwright-cli attach` 的 daemon 與分頁永遠不收；理由見 `docs/adr/0016-reclaim-browser-tabs-by-idleness.md`。改 `session_ttl_hours` 時兩個一起改，`tests/static.sh` 會擋。
 - `chrome` sidecar 的 image 是 headless-shell 加一層中文字型（`chrome/Dockerfile`），不直接 pull。base 與字型版本都在 `config/versions.env`；理由見 `docs/adr/0014-add-cjk-fonts-to-the-chrome-sidecar.md`。
 - `config/openab.toml` 給 codex-acp 加 `CODEX_INTERNAL_ORIGINATOR_OVERRIDE = "codex_exec"`。少了它，gateway 會不定期對 bot 回 `gpt-6.1-sol` `model_not_found`；理由見 `docs/adr/0013-send-a-codex-originator-to-the-gateway.md`。
 - 生圖／改圖只走 `company-image`，參數維持 prompt、size、來源圖片。endpoint、header、model、輸出路徑留在 CLI 內；理由見 `docs/adr/0008-restricted-company-image-cli.md`。
@@ -84,21 +90,12 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 
 ## 驗證
 
-Local 每次至少跑：
+每次改完跑 `README.md`「驗證」那三行；有可用 deployment host secrets 與 snapshots 時，再跑
+`./scripts/preflight.sh`。worktree 沒有 root `.env` 時 `docker compose config` 會缺 `SNAPSHOT_ROOT`，
+從主 checkout 複製一份（它只有路徑與 uid）。
 
-```bash
-./tests/static.sh                       # 含 tests/*.py 三支 mocked 測試
-bash -n scripts/*.sh tests/*.sh
-docker compose config --quiet
-```
-
-沒有 Docker 的機器上，`tests/static.sh` 會在最後印出「LIMITED VERIFICATION」列出沒驗到的項目。
-那不是 smoke test 通過，回報時要照實說。
-
-有可用 deployment host secrets 與 snapshots 時，再跑 `./scripts/preflight.sh`。
-
-`tests/static.sh` 會跑三支 mocked 測試（`tests/image-runtime.py`、`tests/slack-thread-artifact.py`、
-`tests/artifact-path-safety.py`），沒有一支呼叫 Slack 或公司 gateway。
+`tests/static.sh` 最後印出「LIMITED VERIFICATION」時，列出的項目就是沒驗到，回報時照實說。
+它的測試全部 mocked，不呼叫 Slack 或公司 gateway。
 
 跑得過**不代表**這一版可以放給人用。人工能驗的清單在 `docs/runbook.md`「人工 release gate」，
 與 `scripts/deploy.sh` 結尾印出的清單一致。回報時照實說哪些沒驗到，不要把 `static.sh` 或

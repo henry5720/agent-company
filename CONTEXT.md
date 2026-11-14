@@ -65,6 +65,11 @@ container 內實際接 ACP 的 CLI：OpenAB 跑 `codex-acp`，mode 是 `agent-fu
 在 [`config/codex/`](config/codex/)。照 OpenAB 官方 Codex 部署，邊界是 container 本身。
 _Avoid_: runtime npx download、Codex 內層 sandbox
 
+**thread browser context**:
+一個 Slack thread 在共用 headless Chrome 裡專屬的 isolated context。cookie、登入與分頁只屬於這個
+thread；thread 做完或閒置 4 小時，連同分頁一起收掉。所有 thread 共用的是 Chrome 本身，不是登入狀態。
+_Avoid_: 共用瀏覽器、browser per session、每個 thread 一個 Chrome
+
 **runtime secret**:
 container 內 agent process 拿得到的憑證：Slack bot token 與公司 gateway key。它們跟 agent 執行的
 repo code 共用同一個失效邊界：沒有 broker、proxy 或 token 隔離層。container 裡沒有 GitHub credential。

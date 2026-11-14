@@ -2,7 +2,7 @@
 
 ## 目標
 
-在 Slack 提供一個公司同事共用的 coding agent。它拿 repo snapshot 當 product context 回答產品問題、查詢或建立待辦；需要時 clone 一份 repo 到自己的 home 修改、安裝、跑測試或 dev server，再把結果（說明、patch、截圖、檔案）交回原 Slack thread。
+在 Slack 提供一個公司同事共用的 coding agent。repo 的定位（三個上游怎麼組起來、哪些改動屬於這裡）見 [`README.md`](../README.md) 開頭；這份只寫系統行為與邊界。
 
 它送不回 GitHub：container 裡沒有 GitHub credential，不 push、不開 PR／issue，也不通知 PM 驗收。改好的 code 是 `.patch`，由人在自己的電腦套用與 push。
 
@@ -163,6 +163,7 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
   - `/etc/codex/catalog.json` 與 `/etc/openab/config.toml`。
 - `~/.codex/config.toml`、`~/.codex/AGENTS.md`、`~/.agents/skills` 由 [`agents/bin/agent-sync`](../agents/bin/agent-sync) 在 OpenAB `pre_boot` 與每小時 snapshot 同步後產生，跟維護者機器的 chezmoi + skillshare 同一套：provider 換新、skillshare 寫的 MCP 條目保留（整份覆蓋會讓 skillshare 拒絕同步），規則是維護者個人規則接上 bot 專屬規則。這幾個檔在 home 裡、agent 改得到；agent 本來就拿得到 gateway key，這是 ADR 0012 接受的取捨。
 - `chrome` sidecar 跑固定 digest 的 headless Chrome，加一層固定版本的中文字型（[`chrome/Dockerfile`](../chrome/Dockerfile)，理由見 [`adr/0014-add-cjk-fonts-to-the-chrome-sidecar.md`](adr/0014-add-cjk-fonts-to-the-chrome-sidecar.md)），透過只持有網路的 `net`（k8s pause container）跟 agent 共用 localhost，任一邊重啟都不影響另一邊：agent 的 playwright-cli（`attach --cdp`）與 chrome-devtools MCP 都連 `127.0.0.1:9222`（跟維護者機器同一個 `--browser-url`），Chrome 開得到 agent 跑起來的 dev server。sidecar 沒有 token 與 volume，只聽 127.0.0.1。使用者連不到它；給人看的預覽網址之後另做。
+  所有 thread 共用這個 Chrome，但各自用 `t-<thread_ts>` 的 isolated context（thread browser context），cookie 不互通。回收照閒置：playwright-cli 閒置 4 小時（`PLAYWRIGHT_MCP_IDLE_TIMEOUT`，跟 `session_ttl_hours` 一樣）自動 detach 並關掉 context；host 的 `# agent-company-browser-reap`（`scripts/reap-browser-tabs.sh`，每小時 :37）只兜底 default context，同一個分頁 4 小時網址沒變就關。理由見 [`adr/0016-reclaim-browser-tabs-by-idleness.md`](adr/0016-reclaim-browser-tabs-by-idleness.md)。
 - 同事的 Chrome 經插件加一次性 tunnel 接進來，跟 sidecar 是兩回事：同事在 DM 請 agent 接他的瀏覽器，agent 跑 agent-config browser-access skill 的 `personal-chrome-attach --tunnel`，它起 playwright-cli 的插件 relay（container 的 localhost、隨機 port），再用 image 裡的 cloudflared 開一條 tcp quick tunnel 指向 relay。同事在自己的電腦跑 `cloudflared access tcp --hostname <x>.trycloudflare.com --url 127.0.0.1:9555`，在 Playwright Extension 貼上 connect 網址、按允許。
 
   ```text
@@ -214,6 +215,7 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
 19. `tests/static.sh` 與 `scripts/deploy.sh` 都不聲稱驗過 Slack、公司 gateway、STT 或 cron 觸發；`deploy.sh` 結束時印出未驗清單，對應 [`runbook.md`](runbook.md#人工-release-gate) 的「人工 release gate」。
 20. 同事在 DM 請 agent 接他的瀏覽器，照回覆的四步（裝 cloudflared、跑 `cloudflared access tcp`、開獨立 profile 並裝 Playwright Extension、在插件貼 connect 網址）就接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址。只能人工驗收；cloudflared 版本由 `deploy.sh` 驗。
 21. 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢。只能人工驗收；`mcpdo` 跑得起來由 `deploy.sh` 驗，接法在本機用假 MCP server 驗過（ADR 0015）。
+22. 兩個 thread 各開瀏覽器：A 登入某網站後，B 的 context 沒有那份登入。thread 做完 `close` 後，它的 context 與分頁從 sidecar 消失；沒 close 的 daemon 閒置 4 小時後自己結束，context 一起收掉。default context 裡 4 小時網址沒變的分頁，在下一次 `# agent-company-browser-reap` 被關，isolated context 不受影響。排程存在與判斷規則由 `tests/static.sh` 驗；閒置收回在 sidecar 上以短 timeout 實測過（ADR 0016），正式 4 小時與 cron 觸發只能人工確認。
 
 ## 人工前置作業
 

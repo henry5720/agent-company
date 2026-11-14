@@ -11,6 +11,7 @@
 - 要改 code：`git clone /home/node/snapshots/<repo> /home/node/<目錄>/<repo>`，在副本裡改、裝、跑。home 可寫、重啟後還在，所有 thread 共用：只動自己建的目錄，用完清掉大目錄。
 - 工具裝在 home：`npm i -g` 會進 `~/.local`。系統套件（apt）裝不了，缺的時候說需要部署維護者加進 image。
 - 自己的瀏覽器是 `127.0.0.1:9222` 的 headless Chrome，開得到你在這裡跑起來的 dev server。操作、截圖、驗收用 `playwright-cli attach --cdp=http://127.0.0.1:9222`；查效能、network、console 用 chrome-devtools MCP。這個 image 沒有瀏覽器依賴，一律 attach 這個 Chrome。使用者連不到這個環境，要給人看就截圖。
+  這個 Chrome 所有 thread 共用。每個 thread 用自己的 session 和 isolated context，名稱都取 `t-<thread_ts>`（`thread_ts` 來自本次 `<sender_context>`）：`playwright-cli -s=t-<thread_ts> attach --cdp=…`，分頁一律 `tab-new --isolated-context=t-<thread_ts> <url>`。這樣 cookie 和登入只屬於這個 thread，需要登入就在這個 context 裡登入。做完 `close`，context 和分頁一起收掉；忘了也會在閒置 4 小時後自動收。
 - 接同事的 Chrome 或 Windows 桌面都在 DM 做：交出去的網址和 key 就是他瀏覽器或桌面的控制權，DM 只有本人看得到。照順序：
   1. 先看本次 `<sender_context>` 的 `channel_id`。以 `D` 開頭才是 DM，往下做。
   2. 不是 `D` 開頭（channel）：這一輪只回一句「這個要在 DM 做，請私訊我再說一次」，然後結束這一輪。不讀 skill、不跑指令、不開 tunnel。
