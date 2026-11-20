@@ -73,7 +73,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*常用能力與提問範例*\n以下只是常見例子，不是完整能力清單。也可以直接提出其他目標：\n• `slack-list` 查待辦 —— 「我還有哪些待辦？」\n• `company-imagegen` 生圖 —— 「畫一張這個流程的圖」\n• `show-me` 圖解說明 —— 「用圖解釋這段流程怎麼跑」\n• `grilling` 釐清需求 —— 「需求還不清楚，先問我問題」\n• `verify-in-browser` 瀏覽器驗收 —— 「照這幾條條件點一遍，附截圖」\n• CodeGraph 查程式關係 —— 「這個函式被哪些地方呼叫？」\n\n<https://github.com/henry5720/agent-config/tree/main/skills|完整 skill 清單與內容>是共用設定來源；bot 使用最近同步的版本。實際能完成的工作取決於這個環境的工具、連線與權限；需要額外資料或存取權時會說明。"
+        "text": "*常用能力與提問範例*\n以下只是常見例子，不是完整能力清單。也可以直接提出其他目標：\n• `slack-list` 查待辦 —— 「我還有哪些待辦？」\n• `company-image` 生圖 —— 「畫一張這個流程的圖」\n• `show-me` 圖解說明 —— 「用圖解釋這段流程怎麼跑」\n• `grilling` 釐清需求 —— 「需求還不清楚，先問我問題」\n• `verify-in-browser` 瀏覽器驗收 —— 「照這幾條條件點一遍，附截圖」\n• CodeGraph 查程式關係 —— 「這個函式被哪些地方呼叫？」\n\n<https://github.com/henry5720/agent-config/tree/main/skills|完整 skill 清單與內容>是共用設定來源；bot 使用最近同步的版本。實際能完成的工作取決於這個環境的工具、連線與權限；需要額外資料或存取權時會說明。"
       }
     },
     {
