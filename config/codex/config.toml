@@ -3,9 +3,9 @@
 # Codex 的 provider 設定不讀 env，所以 gateway 位址只能這樣填進去；key 照常走 env_key。
 model_provider = "company"
 model = "gpt-6.1-sol"
-# 只放 gpt-6.1-sol 一筆，消掉每輪回覆開頭的 model metadata warning。內容原樣取自該版 codex
-# `codex-rs/models-manager/models.json` 的 gpt-6.1-sol 那筆；升級 codex 時要重產，
-# parse 失敗 codex 整個起不來。
+# 整份原樣取自該版 codex 的 `codex-rs/models-manager/models.json`（公司 gateway 跟 codex 同一份清單），
+# Discord 的 /models 列的就是這裡 visibility = list 的那幾個。少了 model 那筆，每輪回覆開頭會有
+# model metadata warning；升級 codex 時整份換掉，parse 失敗 codex 整個起不來。
 model_catalog_json = "/etc/codex/catalog.json"
 
 [model_providers.company]

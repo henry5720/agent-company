@@ -38,6 +38,9 @@ compose() { docker compose -f "$ROOT/compose.yaml" "$@"; }
 render_codex_config "$ROOT/config/codex/config.toml" "$ROOT/env/openab.env" "$ROOT/runtime/codex/config.toml"
 compose build --pull
 compose up -d --remove-orphans
+# openab.toml、AGENTS.md、catalog.json 都是 bind mount，OpenAB 與 agent-sync 只在啟動時讀；
+# image 沒變時 up 不會重建 container，所以一律重啟 agent。net、chrome 不動，Chrome 不會斷。
+compose restart agent
 
 compose exec -T agent python3 --version
 compose exec -T agent git --version

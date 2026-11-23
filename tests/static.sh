@@ -127,8 +127,10 @@ assert provider['env_key'] == 'COMPANY_GATEWAY_API_KEY'
 assert 'experimental_bearer_token' not in provider, 'the key must not be written into the config file'
 assert codex['model_catalog_json'] == '/etc/codex/catalog.json'
 catalog = json.loads((root / 'config/codex/catalog.json').read_text())
-assert [m['slug'] for m in catalog['models']] == [codex['model']], 'catalog must hold exactly the configured model'
-assert catalog['models'][0]['context_window'] > 0
+slugs = [m['slug'] for m in catalog['models']]
+assert codex['model'] in slugs, 'catalog must include the configured model'
+assert len(slugs) == len(set(slugs)), 'catalog slugs must be unique'
+assert all(m['context_window'] > 0 for m in catalog['models'])
 
 repos = {}
 for line in (root / 'config/repos.conf').read_text().splitlines():
