@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 刪掉 drafts 內超過 24 小時的 artifact。
 #
-# `discord-thread-artifact` 上傳失敗時刻意留檔（留著才有機會被觀察與人工處理），
-# 這支排程是唯一會把那些檔案收掉的東西。沒有它，「最多保留 24 小時」只是文件。
+# agent 傳回 Discord 的檔案留在 drafts（上傳不刪檔），這支排程是唯一會把它們收掉的東西。
+# 沒有它，「最多保留 24 小時」只是文件。
 #
 # 刪除在 container 內用 GNU find 做：預設 -P 不追 symlink（drafts 自己是 symlink 時
 # 也只看那個 symlink、不往下走），-type f 只挑 regular file，-delete 用 unlinkat

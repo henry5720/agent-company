@@ -30,7 +30,7 @@ Discord
     -> codex-acp（mode agent-full-access）
       -> 公司 gateway 的 Responses API（模型）
       -> company-image -> 公司 gateway 的 Responses image_generation（生圖，PNG 寫到 drafts）
-      -> discord-thread-artifact -> 原 Discord thread 或 DM（PNG／Markdown／HTML／patch）
+      -> curl Discord API -> 原 Discord thread 或 DM（檔案；OpenAB 只串流文字）
       -> /home/node                  home，named volume `home`，可寫、持久
          -> clone 出來的工作副本、自己裝的套件與工具、Codex session、drafts
       -> /home/node/snapshots/*      repo snapshots，唯讀，單一 mount
@@ -66,7 +66,7 @@ Container 沒有 GitHub token、SSH key 或 Docker socket。image 裡有 `gh`（
 | 輸入 | text、image；PDF、DOCX、XLSX、PPTX 等附件由 agent 自己下載轉文字 | audio、需要 OCR 的掃描檔 |
 | 輸出 | Discord 訊息、PNG、`.patch`、Markdown、明確要求時的 self-contained HTML、截圖 | push、PR、GitHub issue |
 
-產物一律回原本的 Discord thread（DM 就回 DM），單檔 10 MiB 以內。這是同一個 container 內 OpenAB、agent 與 CLI 之間的信任約定，不是安全保證，細節見 [`docs/system-design.md`](docs/system-design.md#回原-thread靠的是什麼)。
+產物一律回原本的 Discord thread（DM 就回 DM），單檔 10 MiB 以內。這是同一個 container 內 OpenAB 與 agent 之間的信任約定，不是安全保證，細節見 [`docs/system-design.md`](docs/system-design.md#回原-thread靠的是什麼)。
 
 ## Cloudflare R2 filestore
 
@@ -99,14 +99,13 @@ R2 bucket 必須手動設定 `incoming/` prefix 的 **1 天 lifecycle expiration
 - `config/codex/catalog.json`：Codex 的 model catalog，升級 Codex 時要重產。
 - `config/repos.conf`：snapshot 清單的正本，新增 repo 只改這裡。
 - `agents/bin/company-image`：生圖／改圖的唯一入口。
-- `agents/bin/discord-thread-artifact`：把 drafts 的 PNG／Markdown／HTML／patch 傳回原 Discord thread 或 DM。
 - `scripts/preflight.sh`：部署前檢查 secrets、版本、Codex 設定與 snapshot 狀態。
 - `scripts/deploy.sh`：產生 Codex 設定、build、啟動，驗 container 內的版本與權限，最後印出人工 release gate。
 - `scripts/update-snapshots.sh`：host 端 clone/fetch/reset，並重建 CodeGraph 索引。
 - `scripts/install-sync-cron.sh`：寫入三個每小時的 crontab entry（snapshot 同步、artifact cleanup、瀏覽器分頁回收）並跑第一次同步。
 - `scripts/cleanup-artifacts.sh`：cron 呼叫的那一支，在 container 內用 `find` 刪掉 drafts 裡超過 24 小時的檔。
 - `scripts/reap-browser-tabs.sh`：cron 呼叫，在 container 內跑 `reap-browser-tabs.mjs`，關掉 default context 裡 4 小時沒換網址的分頁。
-- `tests/static.sh`：靜態檢查，並跑三支 mocked 測試（`image-runtime.py`、`discord-thread-artifact.py`、`artifact-path-safety.py`）。
+- `tests/static.sh`：靜態檢查，並跑兩支 mocked 測試（`image-runtime.py`、`artifact-path-safety.py`）。
 
 AI agent 修改前從 [`CLAUDE.md`](CLAUDE.md) 的閱讀順序開始。
 

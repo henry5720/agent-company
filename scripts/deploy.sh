@@ -65,12 +65,10 @@ compose exec -T agent curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -
 # Chinese pages render with real glyphs only if the sidecar layer installed the CJK fonts.
 compose exec -T chrome test -e /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 
-# 生圖與上傳：只驗它們在、可執行、不可寫。這裡不對 gateway 或 Discord 發任何請求。
+# 生圖：只驗它在、可執行、不可寫。這裡不對 gateway 發任何請求。
 compose exec -T agent sh -lc \
   'command -v company-image >/dev/null &&
     company-image --help >/dev/null &&
-    discord-thread-artifact --help >/dev/null &&
-    test ! -w /usr/local/bin/discord-thread-artifact &&
     test ! -w /usr/local/bin/company-image'
 # Retired runtimes must not be reachable from the agent.
 compose exec -T agent sh -lc \
@@ -113,9 +111,8 @@ NOT VERIFIED HERE — manual release gate, see the "人工 release gate" section
 docs/runbook.md. Do not call this version released until every line is ticked off:
   1. Discord round trip: @bot in a channel opens a thread and answers; a follow-up in
      that thread needs no @; a DM gets an answer.
-  2. discord-thread-artifact against real Discord: a file from the first turn of a channel
-     question, from a later turn in that thread, and from a DM each land where they started,
-     and the draft is deleted; force one failure and confirm the draft is kept.
+  2. File upload against real Discord: a file from the first turn of a channel question,
+     from a later turn in that thread, and from a DM each land where they started.
   3. company-image against the real company gateway (this bills one call).
   4. Artifact cleanup: `./scripts/cleanup-artifacts.sh` by hand, then confirm the
      crontab entry exists and its log has no FAILED line.

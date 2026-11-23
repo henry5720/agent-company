@@ -37,7 +37,7 @@
 | Discord 存取、session 與 agent process | `config/openab.toml` |
 | Codex provider、模型與 catalog | `config/codex/`（`config.toml` 是範本，`scripts/deploy.sh` 填入 gateway 位址） |
 | 生圖／改圖能力邊界 | `agents/bin/company-image`（改介面等於改能力） |
-| 檔案回 thread 的格式與路徑 | `agents/bin/discord-thread-artifact` |
+| 檔案回 thread 的方式 | `agents/AGENTS.md`〈傳回 thread〉（OpenAB 官方的 curl 寫法） |
 | Snapshot remote 與基準 branch | `config/repos.conf` |
 | Host 排程（snapshot 同步、artifact cleanup、瀏覽器分頁回收） | `scripts/lib.sh` 的 `render_crontab` |
 | Skill、MCP 與個人規則 | `agent-config`（public repo；bot 與維護者機器共用） |
@@ -61,7 +61,7 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 - `chrome` sidecar 的 image 是 headless-shell 加一層中文字型（`chrome/Dockerfile`），不直接 pull。base 與字型版本都在 `config/versions.env`；理由見 `docs/adr/0014-add-cjk-fonts-to-the-chrome-sidecar.md`。
 - `config/openab.toml` 給 codex-acp 加 `CODEX_INTERNAL_ORIGINATOR_OVERRIDE = "codex_exec"`。少了它，gateway 會不定期對 bot 回 `gpt-6.1-sol` `model_not_found`；理由見 `docs/adr/0013-send-a-codex-originator-to-the-gateway.md`。
 - 生圖／改圖只走 `company-image`，參數維持 prompt、size、來源圖片。endpoint、header、model、輸出路徑留在 CLI 內；理由見 `docs/adr/0008-restricted-company-image-cli.md`。
-- `company-image` 與 `discord-thread-artifact` 的路徑處理固定從 root 開 dirfd、逐段 `O_DIRECTORY|O_NOFOLLOW`；刪除用同一個 parent fd 並比對檔案 identity；寫入用 `O_CREAT|O_EXCL|O_NOFOLLOW` 加 temp→fsync→rename。`tests/artifact-path-safety.py` 會擋 `resolve()` 或字串比對後再開檔的寫法。
+- `company-image` 的路徑處理固定從 root 開 dirfd、逐段 `O_DIRECTORY|O_NOFOLLOW`；寫入用 `O_CREAT|O_EXCL|O_NOFOLLOW` 加 temp→fsync→rename。`tests/artifact-path-safety.py` 會擋 `resolve()` 或字串比對後再開檔的寫法。
 
 ## 不可破壞的邊界
 
