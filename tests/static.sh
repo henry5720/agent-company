@@ -37,7 +37,8 @@ for key in ('allowed_channels', 'allowed_users', 'allow_all_channels', 'allow_al
     assert key not in discord, f'{key}: keep the OpenAB default (no allowlist)'
 # 接同事 Chrome／Windows 的網址與 key 只在 DM 交付（agents/AGENTS.md），DM 關掉就沒有這條路。
 assert discord['allow_dm'] is True
-assert discord.get('allow_bot_messages', 'off') == 'off'
+# 同事的 agent 透過 discord MCP 用 bot 身分 @它；不開 all，免得 bot 之間互相觸發。
+assert discord.get('allow_bot_messages') == 'mentions'
 # OpenAB 直接跑 codex-acp，三個 env 只從 [agent].env 給。
 assert cfg['agent']['command'] == 'codex-acp', cfg['agent']['command']
 assert not cfg['agent'].get('args'), 'codex-acp takes no args'

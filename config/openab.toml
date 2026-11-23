@@ -5,6 +5,10 @@ bot_token = "${DISCORD_BOT_TOKEN}"
 # DM 預設關，這裡要開：接同事 Chrome、Windows 桌面的網址和 key 只在 DM 交付（agents/AGENTS.md）。
 allow_dm = true
 
+# 其他 bot 的訊息有 @這個 bot 才處理（OpenAB 預設 off = 全部不理）。讓同事用自己的 agent 透過 discord MCP
+# （agent-config 的 docs/mcp/discord.md）發訊息給它。連續 bot 回合受 max_bot_turns（預設 100）節流。
+allow_bot_messages = "mentions"
+
 # OpenAB 直接跑 codex-acp。provider、model 與 catalog 在 config/codex/。
 # 三個 env 只能從這裡給：[agent].env 在 env_clear() 之後加入、會蓋過 inherit_env；
 # OpenAB 不呼叫 session/set_mode，所以初始 mode 只能用 INITIAL_AGENT_MODE。
