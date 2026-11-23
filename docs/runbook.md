@@ -83,6 +83,8 @@ R2_SECRET_ACCESS_KEY=<Cloudflare R2 secret key>
 
 ### 在 Discord 確認
 
+channel 的項目都在 `#bot-test` 做。
+
 1. DM 詢問一個 repo 問題。
 2. 在 channel @ bot 問一個問題，確認它從你那則訊息開 thread 回答；在 thread 裡不 @ 再問一句，確認它接著回。
 3. 傳一張截圖問問題，確認圖片有被讀到；再傳一份 PDF 或 DOCX，確認 bot 讀了內容後回答。
@@ -191,7 +193,7 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 
 `tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、Codex 版本對、provider 設定已產生且唯讀、cloudflared 是釘住的版本、`mcpdo` 跑得起來、home 可寫而 snapshot 與 skills 不可寫」；preflight 另外只做 R2 secret／endpoint 檢查；R2 lifecycle 與 Message Content Intent 是第一次部署的一次性設定。**不會呼叫 Discord、Cloudflare 或公司 gateway，也不會證明 crontab 真的觸發過。** 沒有 Docker 的機器上 `tests/static.sh` 連 Compose render 都是本機解析（它會印 LIMITED VERIFICATION）。
 
-所以下面這幾項是人工 gate，每次 release 都要重跑一遍，不能因為 `deploy.sh` 退出 0 就當它們過了。編號與 `deploy.sh` 結束時印的清單相同：
+所以下面這幾項是人工 gate，每次 release 都要重跑一遍，不能因為 `deploy.sh` 退出 0 就當它們過了。channel 的項目在 `#bot-test` 跑，別洗到一般頻道；DM 的項目要人親自私訊（Discord 不讓 bot 私訊 bot）。編號與 `deploy.sh` 結束時印的清單相同：
 
 | # | 要驗什麼 | 怎麼驗 | 為什麼自動化驗不到 |
 |---|---|---|---|
