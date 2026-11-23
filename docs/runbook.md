@@ -191,7 +191,7 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 
 ### 人工 release gate
 
-`tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、Codex 版本對、provider 設定已產生且唯讀、cloudflared 是釘住的版本、`mcpdo` 跑得起來、home 可寫而 snapshot 與 skills 不可寫」；preflight 另外只做 R2 secret／endpoint 檢查；R2 lifecycle 與 Message Content Intent 是第一次部署的一次性設定。**不會呼叫 Discord、Cloudflare、公司 gateway 或 STT，也不會證明 crontab 真的觸發過。** 沒有 Docker 的機器上 `tests/static.sh` 連 Compose render 都是本機解析（它會印 LIMITED VERIFICATION）。
+`tests/static.sh` 是靜態檢查，`scripts/deploy.sh` 只驗到「container 起得來、Codex 版本對、provider 設定已產生且唯讀、cloudflared 是釘住的版本、`mcpdo` 跑得起來、home 可寫而 snapshot 與 skills 不可寫」；preflight 另外只做 R2 secret／endpoint 檢查；R2 lifecycle 與 Message Content Intent 是第一次部署的一次性設定。**不會呼叫 Discord、Cloudflare 或公司 gateway，也不會證明 crontab 真的觸發過。** 沒有 Docker 的機器上 `tests/static.sh` 連 Compose render 都是本機解析（它會印 LIMITED VERIFICATION）。
 
 所以下面這幾項是人工 gate，每次 release 都要重跑一遍，不能因為 `deploy.sh` 退出 0 就當它們過了。編號與 `deploy.sh` 結束時印的清單相同：
 
@@ -201,13 +201,12 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 | 2 | Artifact 回原處 | 上面「在 Discord 確認」第 4 項：channel 第一則、thread 後續、DM 三處的檔案都出現在原處、drafts 原檔被刪；刻意失敗一次確認留檔 | 需要真的 `DISCORD_BOT_TOKEN` 與真的 thread；離線測試只用假 Discord |
 | 3 | 生圖 | 上面那兩行 `company-image generate`（會產生一次計費呼叫） | 離線測試只驗 request shape |
 | 4 | Artifact cleanup 排程 | `./scripts/cleanup-artifacts.sh` 手動跑一次，再確認 crontab entry 存在、log 沒有 `FAILED` | 靜態測試只證明排程被寫進去，不證明 cron 觸發過 |
-| 5 | STT（`[stt].enabled = true` 時才要） | 用真實音檔打一次 `/audio/transcriptions` | 靜態檢查不發請求 |
-| 6 | 模型推論直連公司 gateway | 一個 Discord 問題得到回答，開頭沒有 model metadata warning；一次 shell tool call 可用；同一 thread 的第二則訊息恢復原 session（`session/load`），不是重開 | 離線沒有任何東西能證明 gateway 收這條路由 |
-| 7 | Coding 流程 | 上面「在 Discord 確認」第 5 項：clone、`pnpm install`、`.patch` 上傳到 thread | 需要真的模型、Discord 與網路 |
-| 8 | 自己的瀏覽器 | 請 agent 起某個 repo 的 dev server，用 chrome-devtools 截圖，PNG 出現在 thread | 需要真的模型、Discord 與 Chrome sidecar |
-| 9 | 接同事的瀏覽器（[system-design](system-design.md) 驗收第 17 條） | DM 請 agent 接瀏覽器，照回覆的步驟（裝 cloudflared、跑 `cloudflared access tcp`、在 Playwright Extension 貼 connect 網址）接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址 | 需要真的 Cloudflare quick tunnel、同事的 Chrome 與插件；`deploy.sh` 只驗 cloudflared 版本 |
-| 10 | 操作同事的 Windows 桌面（[system-design](system-design.md) 驗收第 18 條） | 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢 | 需要真的 Windows 桌面與 quick tunnel；`deploy.sh` 只驗 `mcpdo` 跑得起來，接法只在本機用假 MCP server 驗過（[ADR 0015](adr/0015-connect-mid-session-mcp-with-mcpdo.md)） |
-| 11 | 瀏覽器回收（[system-design](system-design.md) 驗收第 19 條） | 兩個 thread 各開一個分頁：第二個 thread 沒有第一個的登入；`close` 後該 thread 的 context 與分頁消失；再手動跑 `./scripts/reap-browser-tabs.sh`，確認 crontab entry 存在、log 沒有 `FAILED` | 需要真的模型與 Discord thread；閒置 detach 只在 sidecar 上用短 timeout 實測過（[ADR 0016](adr/0016-reclaim-browser-tabs-by-idleness.md)） |
+| 5 | 模型推論直連公司 gateway | 一個 Discord 問題得到回答，開頭沒有 model metadata warning；一次 shell tool call 可用；同一 thread 的第二則訊息恢復原 session（`session/load`），不是重開 | 離線沒有任何東西能證明 gateway 收這條路由 |
+| 6 | Coding 流程 | 上面「在 Discord 確認」第 5 項：clone、`pnpm install`、`.patch` 上傳到 thread | 需要真的模型、Discord 與網路 |
+| 7 | 自己的瀏覽器 | 請 agent 起某個 repo 的 dev server，用 chrome-devtools 截圖，PNG 出現在 thread | 需要真的模型、Discord 與 Chrome sidecar |
+| 8 | 接同事的瀏覽器（[system-design](system-design.md) 驗收第 16 條） | DM 請 agent 接瀏覽器，照回覆的步驟（裝 cloudflared、跑 `cloudflared access tcp`、在 Playwright Extension 貼 connect 網址）接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址 | 需要真的 Cloudflare quick tunnel、同事的 Chrome 與插件；`deploy.sh` 只驗 cloudflared 版本 |
+| 9 | 操作同事的 Windows 桌面（[system-design](system-design.md) 驗收第 17 條） | 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢 | 需要真的 Windows 桌面與 quick tunnel；`deploy.sh` 只驗 `mcpdo` 跑得起來，接法只在本機用假 MCP server 驗過（[ADR 0015](adr/0015-connect-mid-session-mcp-with-mcpdo.md)） |
+| 10 | 瀏覽器回收（[system-design](system-design.md) 驗收第 18 條） | 兩個 thread 各開一個分頁：第二個 thread 沒有第一個的登入；`close` 後該 thread 的 context 與分頁消失；再手動跑 `./scripts/reap-browser-tabs.sh`，確認 crontab entry 存在、log 沒有 `FAILED` | 需要真的模型與 Discord thread；閒置 detach 只在 sidecar 上用短 timeout 實測過（[ADR 0016](adr/0016-reclaim-browser-tabs-by-idleness.md)） |
 
 第 4 項的指令：
 
@@ -217,13 +216,9 @@ crontab -l | grep agent-company-artifact-cleanup
 tail -n 20 "${XDG_STATE_HOME:-$HOME/.local/state}/agent-company/artifact-cleanup.log"
 ```
 
-第 6 項失敗時看 `docker compose -f ./compose.yaml logs --tail=200 agent`。HTTP 405 代表請求沒打到 Responses endpoint，先查 `COMPANY_GATEWAY_BASE_URL` 的前綴（見 [ADR 0010](adr/0010-company-provider-uses-the-responses-api.md)）；401／403 是 key 的問題。thread 的第二則訊息變成新 session 時，先確認 `config/openab.toml` 的 `CODEX_HOME` 仍指向 home volume 裡的 `/home/node/.codex`。改動 `config/codex/`、`COMPANY_GATEWAY_BASE_URL` 或 Codex 版本之後都要重跑這一項。
+第 5 項失敗時看 `docker compose -f ./compose.yaml logs --tail=200 agent`。HTTP 405 代表請求沒打到 Responses endpoint，先查 `COMPANY_GATEWAY_BASE_URL` 的前綴（見 [ADR 0010](adr/0010-company-provider-uses-the-responses-api.md)）；401／403 是 key 的問題。thread 的第二則訊息變成新 session 時，先確認 `config/openab.toml` 的 `CODEX_HOME` 仍指向 home volume 裡的 `/home/node/.codex`。改動 `config/codex/`、`COMPANY_GATEWAY_BASE_URL` 或 Codex 版本之後都要重跑這一項。
 
 `deploy.sh` 結束時會把這份清單再印一次，避免只看終端機輸出的人以為已經驗完。
-
-### 啟用 audio 轉錄（可選）
-
-不要把 company gateway 當成 STT provider。先用一個已確認支援 OpenAI-compatible `/audio/transcriptions` 的 endpoint 填 `STT_BASE_URL`、`STT_API_KEY`，再把 `config/openab.toml` 的 `[stt].enabled` 改成 `true`，重新跑 `./tests/static.sh && ./scripts/deploy.sh`。未做完這些步驟時 audio 必須被 bot 明確拒絕。首次驗證要以真實音檔打一次 STT endpoint；靜態檢查不會發請求。
 
 ## 4. 日常操作
 

@@ -72,7 +72,7 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 - Discord bot token、公司 gateway key 與 agent 執行的 repo code 在同一個 container，這是已決定的取捨（ADR 0012）。文件照實寫，不宣稱有 broker、proxy 或 token 隔離。
 - 「產物回原本那個 Discord thread」只能寫成單一 container 內 OpenAB `sender_context`、agent 與受限 CLI 之間的信任約定，**不是安全保證**。理由見 `docs/adr/0009-thread-artifact-upload-and-optional-stt.md`。
 - 上傳失敗的 artifact 由 host crontab 收。`scripts/cleanup-artifacts.sh` 在 container 內跑 GNU `find -type f -delete`（不追 symlink）；換成別的刪法要保住同樣的保證。
-- `tests/static.sh` 與 `scripts/deploy.sh` 只宣稱驗過離線能驗的事；Discord、公司 gateway、STT、cron 觸發屬於 `docs/runbook.md`「人工 release gate」。
+- `tests/static.sh` 與 `scripts/deploy.sh` 只宣稱驗過離線能驗的事；Discord、公司 gateway、cron 觸發屬於 `docs/runbook.md`「人工 release gate」。
 - `allow_all_users = true` 讓同一個 Discord server 的成員可驅動 agent；實際入口仍受 bot 被邀進哪些頻道限制。
 - `allow_dm = true` 必須維持：接同事 Chrome、Windows 的網址與 key 只在 DM 交付。
 - `allow_all_channels = true` 仍須維持；改這一項前先讀 `docs/system-design.md` 的「互動入口」。

@@ -96,7 +96,7 @@ compose ps
 # preflight.sh 在 build 前已完成 R2 secret/host 檢查。R2 lifecycle 與 Discord Message Content Intent 是
 # runbook 的一次性設定，這裡不再每次確認。這支跑完仍不等於
 # 這一版可以放給人用。上面每一條都是 container 內的存在性與權限檢查，
-# 沒有一條打過 Discord、公司 gateway 或 STT，也沒有一條證明排程真的會觸發。
+# 沒有一條打過 Discord 或公司 gateway，也沒有一條證明排程真的會觸發。
 # 那些只能由人在有 secret 的環境做一次，做完才算 release。
 cat <<'GATE'
 
@@ -116,25 +116,24 @@ docs/runbook.md. Do not call this version released until every line is ticked of
   3. company-image against the real company gateway (this bills one call).
   4. Artifact cleanup: `./scripts/cleanup-artifacts.sh` by hand, then confirm the
      crontab entry exists and its log has no FAILED line.
-  5. STT, only if [stt].enabled is true: one real audio file through the endpoint.
-  6. Model inference straight to the company gateway: one Discord question gets an
+  5. Model inference straight to the company gateway: one Discord question gets an
      answer with no "Model metadata" warning, a shell tool call works, and a second
      @mention in the same thread resumes the session (session/load) instead of
      starting over. Nothing offline can prove the gateway accepts this route.
-  7. Coding loop: ask for a small change in one repo; the agent clones from
+  6. Coding loop: ask for a small change in one repo; the agent clones from
      /home/node/snapshots, runs `pnpm install`, and uploads a .patch to the thread.
-  8. Browser: ask the agent to start that repo's dev server and send a screenshot
+  7. Browser: ask the agent to start that repo's dev server and send a screenshot
      taken through chrome-devtools; the PNG lands in the thread.
-  9. Colleague's Chrome over the tunnel, in a DM: following the agent's steps
+  8. Colleague's Chrome over the tunnel, in a DM: following the agent's steps
      (install cloudflared, run `cloudflared access tcp`, paste the connect URL into the
      Playwright Extension) connects; two tab-new then tab-list shows 3 tabs; after
      detach the tunnel URL returns 530 from the internet. The same request in a channel
      gets "move to DM" and no connect URL appears there.
- 10. Colleague's Windows desktop, in a DM: given the windows-mcp quick tunnel URL and
+  9. Colleague's Windows desktop, in a DM: given the windows-mcp quick tunnel URL and
      key, the agent connects with mcpdo and posts a desktop screenshot to the thread;
      after the colleague stops the server and rotates the key, the URL returns 530 and
      the old key is dead.
- 11. Browser reclaim: two threads each open a tab; the second thread does not inherit
+ 10. Browser reclaim: two threads each open a tab; the second thread does not inherit
      the first one's login; after `close` the thread's context and tabs are gone; then
      `./scripts/reap-browser-tabs.sh` by hand, confirm the crontab entry exists and its
      log has no FAILED line.

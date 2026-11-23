@@ -63,7 +63,7 @@ Container 沒有 GitHub token、SSH key 或 Docker socket。image 裡有 `gh`（
 
 | 方向 | 支援 | 不支援 |
 |---|---|---|
-| 輸入 | text、image；PDF、DOCX、XLSX、PPTX 等附件由 agent 自己下載轉文字 | audio（STT 未啟用時）、需要 OCR 的掃描檔 |
+| 輸入 | text、image；PDF、DOCX、XLSX、PPTX 等附件由 agent 自己下載轉文字 | audio、需要 OCR 的掃描檔 |
 | 輸出 | Discord 訊息、PNG、`.patch`、Markdown、明確要求時的 self-contained HTML、截圖 | push、PR、GitHub issue |
 
 產物一律回原本的 Discord thread（DM 就回 DM），單檔 10 MiB 以內。這是同一個 container 內 OpenAB、agent 與 CLI 之間的信任約定，不是安全保證，細節見 [`docs/system-design.md`](docs/system-design.md#回原-thread靠的是什麼)。
@@ -120,7 +120,7 @@ docker compose config --quiet
 
 `tests/static.sh` 只做靜態檢查，三支 mocked 測試都不呼叫 Discord 或公司 gateway。沒有 Docker 的機器上它會改用本機解析 `compose.yaml`，並在最後印出「LIMITED VERIFICATION」—— 那不是 smoke test 通過。
 
-`scripts/deploy.sh` 只多驗 container 內的版本、檔案與讀寫權限。真的 Discord 往返、生圖、模型推論打到 gateway、coding 流程、STT 與 cleanup 排程是否觸發，都在 [`docs/runbook.md`](docs/runbook.md#人工-release-gate) 的「人工 release gate」，**必須由人各跑一次**；`deploy.sh` 退出 0 不代表那些過了，它結束時會把清單再印一次。
+`scripts/deploy.sh` 只多驗 container 內的版本、檔案與讀寫權限。真的 Discord 往返、生圖、模型推論打到 gateway、coding 流程與 cleanup 排程是否觸發，都在 [`docs/runbook.md`](docs/runbook.md#人工-release-gate) 的「人工 release gate」，**必須由人各跑一次**；`deploy.sh` 退出 0 不代表那些過了，它結束時會把清單再印一次。
 
 Local 與 deployment host 共用同一套設定。目標機器填好 secrets 並完成首次 snapshot sync 後：
 

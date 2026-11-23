@@ -33,6 +33,8 @@ inherit_env = [
   "COMPANY_GATEWAY_BASE_URL",
   # agent-config mcp.yaml 的 context7 用 fromEnv 讀它；沒設時 context7 拿不到 key，其他 MCP 照常。
   "CONTEXT7_API_KEY",
+  # agent-config mcp.yaml 的 graphify 用 fromEnv 讀它；沒設時 graphify 連不上，其他 MCP 照常。
+  "GRAPHIFY_API_KEY",
   # discord-thread-artifact 用它把檔案傳回原 thread。
   "DISCORD_BOT_TOKEN",
 ]
@@ -46,16 +48,6 @@ exec /usr/local/bin/agent-sync
 '''
 timeout_seconds = 60
 on_failure = "abort"
-
-# 音檔只會在部署維護者確認另一個 OpenAI-compatible STT endpoint 後才啟用。公司
-# gateway 不因此被假定支援 STT；未啟用時 OpenAB 不轉錄，bot 必須明確回覆 audio 不支援。
-# endpoint 是 STT_BASE_URL + /audio/transcriptions，詳見 OpenAB 的 [stt] 文件。
-[stt]
-enabled = false
-api_key = "${STT_API_KEY}"
-base_url = "${STT_BASE_URL}"
-model = "whisper-large-v3-turbo"
-echo_transcript = false
 
 [filestore]
 # Incoming attachments use Cloudflare R2. Credentials stay in the deployment

@@ -51,16 +51,6 @@ done
 grep -Fq "endpoint = \"https://$R2_ALLOWED_HOST\"" "$ROOT/config/openab.toml" ||
   fail "config/openab.toml [filestore].endpoint must be https://$R2_ALLOWED_HOST"
 
-# STT 是選配，且不是公司 gateway 的延伸假設。兩個值要嘛都沒有、要嘛都填；真正啟用
-# 前還必須把 OpenAB config 的 [stt].enabled 改成 true。
-stt_base=$(grep -E '^STT_BASE_URL=' "$ENV_FILE" || true)
-stt_key=$(grep -E '^STT_API_KEY=' "$ENV_FILE" || true)
-if [[ -n ${stt_base#STT_BASE_URL=} || -n ${stt_key#STT_API_KEY=} ]]; then
-  [[ -n ${stt_base#STT_BASE_URL=} && -n ${stt_key#STT_API_KEY=} ]] ||
-    fail "STT_BASE_URL and STT_API_KEY must be set together"
-  [[ $stt_base == STT_BASE_URL=https://* ]] || fail "STT_BASE_URL must be an https URL"
-fi
-
 printf 'runtime: codex-acp\nconfig:  %s\n' "$ROOT/config/openab.toml"
 # A config or catalog that does not parse stops codex from starting at all. The template
 # carries one ${COMPANY_GATEWAY_BASE_URL} placeholder that deploy.sh fills in.

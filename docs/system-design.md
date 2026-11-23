@@ -81,7 +81,7 @@ home 是所有 thread 共用的空間，沒有自動清理；clone 與套件快�
 
 ## 輸入與輸出邊界
 
-Discord 的 native 輸入是 text、image，以及啟用 STT 時的 audio。PDF、DOCX、XLSX、PPTX 這類附件走 OpenAB 的 R2 filestore：OpenAB 把 R2 `incoming/` 的 presigned URL 與原始 filename 放進 prompt，agent 自己下載、轉成文字再回答；需要轉檔工具就裝在 home。轉不出來（例如需要 OCR 的掃描檔）就直說，不猜內容。agent 只下載 OpenAB 放進 prompt 的那個 URL，不把它傳給其他服務。presigned URL 會隨 prompt 送到公司 gateway。
+Discord 的 native 輸入是 text、image。PDF、DOCX、XLSX、PPTX 這類附件走 OpenAB 的 R2 filestore：OpenAB 把 R2 `incoming/` 的 presigned URL 與原始 filename 放進 prompt，agent 自己下載、轉成文字再回答；需要轉檔工具就裝在 home。轉不出來（例如需要 OCR 的掃描檔）就直說，不猜內容。agent 只下載 OpenAB 放進 prompt 的那個 URL，不把它傳給其他服務。presigned URL 會隨 prompt 送到公司 gateway。
 
 R2 filestore 的設定正本是 `config/openab.toml` 的 `[filestore]`。R2 access key 與 secret key 只透過 `${R2_ACCESS_KEY_ID}`／`${R2_SECRET_ACCESS_KEY}` interpolation 從未追蹤的 `env/openab.env` 取得，不寫入 repo。R2 bucket 必須在外部設定 `incoming/` prefix 的 1 天 lifecycle expiration。preflight 不嘗試用 Cloudflare API 驗證它；這是 runbook 的一次性設定，deploy 不逐次確認。
 
@@ -116,7 +116,7 @@ CLI 的價值只在縮小正常操作下的副作用：拿掉任意 URL、header
 
 上傳失敗時 artifact 暫存檔保留，由 deployment host 的 `# agent-company-artifact-cleanup` crontab entry（`scripts/cleanup-artifacts.sh` → container 內 `find /home/node/drafts -mindepth 1 -type f -mmin +1440 -delete`，每小時 :17；GNU find 預設不追 symlink）收掉；保留期限 24 小時，檢查每小時一次，所以實際壽命是 24 到 25 小時。
 
-Audio 只有獨立的 OpenAI-compatible STT endpoint 已被確認、設定 `STT_BASE_URL`／`STT_API_KEY` 並把 `config/openab.toml` 的 `[stt].enabled` 改成 `true` 時才可轉錄。OpenAB 固定使用該 base URL 的 `/audio/transcriptions`；不假設 company gateway 支援。預設未啟用時 bot 明確拒絕 audio。
+Audio 不支援：OpenAB 沒設 STT，收到音檔會加 🎤 reaction 並略過。
 
 ## 對話回覆
 
@@ -188,14 +188,13 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
 9. 要求改一個 repo 的小地方時，agent 從 `/home/node/snapshots` clone、跑 `pnpm install`，並把 `.patch` 上傳到原 thread。
 10. `company-image generate` 在 container 內產出 PNG 到 `/home/node/drafts/<UTC 日期>/`；非法 size、走出 drafts 的檔名、允許範圍外的來源圖片都被拒絕且不發出 gateway 請求。靜態部分由 `tests/image-runtime.py` 用假 gateway 驗，真的 gateway 回得回圖要在有 key 的環境實跑一次。
 11. `discord-thread-artifact` 只接受 drafts 下的 regular `.png`、`.md`、`.html`、`.patch`，單檔 10 MiB 以內；thread 裡送到 `thread_id`、DM 送回 DM、channel 第一則送到 `message_id`，成功後刪檔，失敗不刪檔。`tests/discord-thread-artifact.py` 用假 Discord 驗這三種路由、multipart body 與失敗留檔；真的 Discord 收不收要在有 token 的環境實傳一次。
-12. 未設定並啟用 STT 時 audio 被明確拒絕；設定獨立相容 endpoint 後才驗 `/audio/transcriptions` 真實轉錄。
-13. 兩支 CLI 都走不出固定 root：父目錄被換成 symlink、檔名本身是 symlink、路徑用 `..` 逃逸，都被拒絕且不發出任何 Discord 或 gateway 請求。`company-image` 的目標檔名被事先種成指向外面的 symlink 時，寫到下一個可用檔名，不寫穿它。由 `tests/artifact-path-safety.py` 重現。
-14. 上傳成功後暫存檔被刪；但暫存檔在讀取之後被換成別的檔案或 symlink 時，**不刪**那個東西，在 stderr 說明並仍 exit 0（檔案確實送出去了，回非零只會讓 agent 重傳）。
-15. Deployment host 的 crontab 有 `# agent-company-artifact-cleanup` entry，每小時執行 `scripts/cleanup-artifacts.sh`，它在 container 內用 `find` 刪掉 drafts 裡超過 24 小時的檔；container 沒在跑時這一輪失敗會寫進 `artifact-cleanup.log` 並回非零。排程存在由 `tests/static.sh` render `render_crontab` 驗；cron 真的觸發過只能人工確認。
-16. `tests/static.sh` 與 `scripts/deploy.sh` 都不聲稱驗過 Discord、公司 gateway、STT 或 cron 觸發；`deploy.sh` 結束時印出未驗清單，對應 [`runbook.md`](runbook.md#人工-release-gate) 的「人工 release gate」。
-17. 同事在 DM 請 agent 接他的瀏覽器，照回覆的四步（裝 cloudflared、跑 `cloudflared access tcp`、開獨立 profile 並裝 Playwright Extension、在插件貼 connect 網址）就接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址。只能人工驗收；cloudflared 版本由 `deploy.sh` 驗。
-18. 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢。只能人工驗收；`mcpdo` 跑得起來由 `deploy.sh` 驗，接法在本機用假 MCP server 驗過（ADR 0015）。
-19. 兩個 thread 各開瀏覽器：A 登入某網站後，B 的 context 沒有那份登入。thread 做完 `close` 後，它的 context 與分頁從 sidecar 消失；沒 close 的 daemon 閒置 4 小時後自己結束，context 一起收掉。default context 裡 4 小時網址沒變的分頁，在下一次 `# agent-company-browser-reap` 被關，isolated context 不受影響。排程存在與判斷規則由 `tests/static.sh` 驗；閒置收回在 sidecar 上以短 timeout 實測過（ADR 0016），正式 4 小時與 cron 觸發只能人工確認。
+12. 兩支 CLI 都走不出固定 root：父目錄被換成 symlink、檔名本身是 symlink、路徑用 `..` 逃逸，都被拒絕且不發出任何 Discord 或 gateway 請求。`company-image` 的目標檔名被事先種成指向外面的 symlink 時，寫到下一個可用檔名，不寫穿它。由 `tests/artifact-path-safety.py` 重現。
+13. 上傳成功後暫存檔被刪；但暫存檔在讀取之後被換成別的檔案或 symlink 時，**不刪**那個東西，在 stderr 說明並仍 exit 0（檔案確實送出去了，回非零只會讓 agent 重傳）。
+14. Deployment host 的 crontab 有 `# agent-company-artifact-cleanup` entry，每小時執行 `scripts/cleanup-artifacts.sh`，它在 container 內用 `find` 刪掉 drafts 裡超過 24 小時的檔；container 沒在跑時這一輪失敗會寫進 `artifact-cleanup.log` 並回非零。排程存在由 `tests/static.sh` render `render_crontab` 驗；cron 真的觸發過只能人工確認。
+15. `tests/static.sh` 與 `scripts/deploy.sh` 都不聲稱驗過 Discord、公司 gateway 或 cron 觸發；`deploy.sh` 結束時印出未驗清單，對應 [`runbook.md`](runbook.md#人工-release-gate) 的「人工 release gate」。
+16. 同事在 DM 請 agent 接他的瀏覽器，照回覆的四步（裝 cloudflared、跑 `cloudflared access tcp`、開獨立 profile 並裝 Playwright Extension、在插件貼 connect 網址）就接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址。只能人工驗收；cloudflared 版本由 `deploy.sh` 驗。
+17. 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢。只能人工驗收；`mcpdo` 跑得起來由 `deploy.sh` 驗，接法在本機用假 MCP server 驗過（ADR 0015）。
+18. 兩個 thread 各開瀏覽器：A 登入某網站後，B 的 context 沒有那份登入。thread 做完 `close` 後，它的 context 與分頁從 sidecar 消失；沒 close 的 daemon 閒置 4 小時後自己結束，context 一起收掉。default context 裡 4 小時網址沒變的分頁，在下一次 `# agent-company-browser-reap` 被關，isolated context 不受影響。排程存在與判斷規則由 `tests/static.sh` 驗；閒置收回在 sidecar 上以短 timeout 實測過（ADR 0016），正式 4 小時與 cron 觸發只能人工確認。
 
 ## 人工前置作業
 
