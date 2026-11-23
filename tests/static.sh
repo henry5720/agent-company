@@ -7,17 +7,18 @@ limited() { LIMITED+=("$1"); }
 
 for path in CONTEXT.md CLAUDE.md Dockerfile compose.yaml .env.example \
   docs/system-design.md README.md config/openab.toml config/versions.env \
-  config/slack-home.json env/openab.env.example; do
+  env/openab.env.example; do
   test -f "$ROOT/$path"
 done
 test ! -e "$ROOT/config/openab.claude-acp.toml"
 test ! -e "$ROOT/scripts/compose.sh"
 test -x "$ROOT/agents/bin/company-image"
-test -x "$ROOT/agents/bin/slack-thread-artifact"
+test -x "$ROOT/agents/bin/discord-thread-artifact"
 test -x "$ROOT/agents/bin/agent-sync"
 test -f "$ROOT/config/skillshare/config.yaml"
 for retired in config/opencode managed-claude-settings.json agents/bin/parse-document \
-  tests/parse-document.py tests/provider-route.py agents/CLAUDE.md; do
+  tests/parse-document.py tests/provider-route.py agents/CLAUDE.md \
+  agents/bin/slack-thread-artifact config/slack-home.json scripts/publish-slack-home.sh; do
   test ! -e "$ROOT/$retired" || { echo "retired runtime file still present: $retired" >&2; exit 1; }
 done
 test -f "$ROOT/config/codex/config.toml"
@@ -28,20 +29,26 @@ python3 - "$ROOT" <<'PY'
 import json, os, pathlib, re, subprocess, tomllib
 root = pathlib.Path(__import__('sys').argv[1])
 cfg = tomllib.loads((root / 'config/openab.toml').read_text())
-assert cfg['slack']['allow_all_users'] is True
+assert 'slack' not in cfg, 'Slack is shut down; the bot runs on Discord'
+discord = cfg['discord']
+assert discord['bot_token'] == '${DISCORD_BOT_TOKEN}'
+assert discord['allow_all_users'] is True and discord['allow_all_channels'] is True
+# 接同事 Chrome／Windows 的網址與 key 只在 DM 交付（agents/AGENTS.md），DM 關掉就沒有這條路。
+assert discord['allow_dm'] is True
+assert discord['allow_bot_messages'] == 'off'
 # OpenAB 直接跑 codex-acp，三個 env 只從 [agent].env 給。
 assert cfg['agent']['command'] == 'codex-acp', cfg['agent']['command']
 assert not cfg['agent'].get('args'), 'codex-acp takes no args'
 assert cfg['agent']['working_dir'] == '/home/node', 'OpenAB recommends home as the Codex working directory'
 inherit = cfg['agent']['inherit_env']
-for key in ('COMPANY_GATEWAY_BASE_URL', 'COMPANY_GATEWAY_API_KEY', 'SLACK_BOT_TOKEN'):
+for key in ('COMPANY_GATEWAY_BASE_URL', 'COMPANY_GATEWAY_API_KEY', 'DISCORD_BOT_TOKEN'):
     assert key in inherit, key
 assert 'CONTEXT7_API_KEY' in inherit, 'agent-config mcp.yaml reads context7 key from env'
 # pre_boot runs agent-sync and blocks startup when it fails: without it Codex has no provider.
 assert cfg['hooks']['pre_boot']['on_failure'] == 'abort'
 assert 'exec /usr/local/bin/agent-sync' in cfg['hooks']['pre_boot']['inline']
 for key in inherit:
-    assert not key.startswith(('PARSE_DOCUMENT_', 'DOCLING_', 'OPENCODE_', 'CLAUDE_')), key
+    assert not key.startswith(('PARSE_DOCUMENT_', 'DOCLING_', 'OPENCODE_', 'CLAUDE_', 'SLACK_', 'WORK_HELPER_')), key
 assert cfg['filestore']['max_file_size_mb'] == 50
 
 versions = {}
@@ -130,8 +137,6 @@ for line in (root / 'config/repos.conf').read_text().splitlines():
     repos[name] = (clone_url, branch)
 assert repos['teamsync-tutorials'] == ('git@github.com:ShuChenAI/teamsync-tutorials.git', 'main')
 assert repos['teamsync-app'] == ('git@github.com:ShuChenAI/teamsync-app.git', 'main')
-home = (root / 'config/slack-home.json').read_text()
-assert all(name in home for name in repos), 'repos.conf names must appear in Slack Home JSON'
 
 deploy = (root / 'scripts/deploy.sh').read_text()
 assert 'VERSION_FILE="$ROOT/config/versions.env"' in deploy
@@ -345,26 +350,22 @@ else
 fi
 
 grep -Fq 'allow_all_users = true' "$ROOT/config/openab.toml"
-grep -Fq 'WORK_HELPER_ISSUE_MODE=manual' "$ROOT/env/openab.env.example"
 ! grep -Fq '/dev/tty' "$ROOT/scripts/preflight.sh"  # deploys must run unattended
 grep -Fq 'docker compose -f "$ROOT/compose.yaml"' "$ROOT/scripts/deploy.sh"
 grep -Fq 'docker compose -f "$ROOT/compose.yaml"' "$ROOT/scripts/preflight.sh"
-python3 - "$ROOT/scripts/publish-slack-home.sh" <<'PY'
-import pathlib, sys
-script = pathlib.Path(sys.argv[1]).read_text()
-for required in ('users.list', 'next_cursor', 'cursor', '.ok == true',
-                 '.deleted != true', '.is_bot != true', '.is_app_user != true',
-                 'No eligible workspace users', 'Published:'):
-    assert required in script, f'publish-slack-home.sh is missing {required!r}'
-assert 'allowed_users' not in script, 'Home publishing must not read nonexistent allowed_users'
-PY
+# Slack 已關：bot 的機器設定不得再拿 Slack token 或呼叫 slack-list（註解不算）。
+if grep -R -n -E 'SLACK_|skills/slack-list/|slack-thread-artifact' \
+  "$ROOT/scripts" "$ROOT/compose.yaml" "$ROOT/Dockerfile" "$ROOT/config" "$ROOT/agents" "$ROOT/env/openab.env.example" |
+  grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#'; then
+  echo 'Slack runtime still referenced' >&2
+  exit 1
+fi
 ! grep -R -n -E 'scripts/compose\.sh|openab\.claude-acp|OPENAB_AGENT_RUNTIME|OPENAB_IMAGE_(OPENCODE|CLAUDE)' \
   "$ROOT/scripts" "$ROOT/compose.yaml" "$ROOT/config" "$ROOT/README.md" "$ROOT/CLAUDE.md" "$ROOT/docs"
-# 退場的 runtime 不得殘留在 bot 的機器設定裡。文件與 Slack Home 文案由 #34 一起改。
+# 退場的 runtime 不得殘留在 bot 的機器設定裡。
 # 註解與 deploy.sh 裡斷言「不存在」的那幾行（`! command -v ...`）不算殘留。
 # 注意：`! grep` 在 set -e 底下不會讓 script 失敗，所以這裡用 if。
 if grep -R -n -i -E 'opencode|oh-my-opencode|claude-agent-acp|parse-document|docling' \
-  --exclude=slack-home.json \
   "$ROOT/scripts" "$ROOT/compose.yaml" "$ROOT/Dockerfile" "$ROOT/config" "$ROOT/env/openab.env.example" |
   grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#|! command -v'; then
   echo 'retired runtime (OpenCode/OMO/Claude ACP/parse-document/Docling) still referenced' >&2
@@ -378,7 +379,7 @@ else
 fi
 
 "$ROOT/tests/image-runtime.py"
-"$ROOT/tests/slack-thread-artifact.py"
+"$ROOT/tests/discord-thread-artifact.py"
 "$ROOT/tests/artifact-path-safety.py"
 python3 "$ROOT/tests/snapshot-sync.py"
 

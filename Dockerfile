@@ -21,7 +21,7 @@ ARG HOST_UID=1000
 ARG HOST_GID=1000
 
 USER root
-# python3：slack-list、company-image、slack-thread-artifact 都只用 stdlib。
+# python3：company-image、discord-thread-artifact 都只用 stdlib。
 # git、curl 上游已有，列出來是因為讀 snapshot 與 clone 副本都靠 git。
 # 上游 image 的 gh 照官方保留；container 裡沒有 GitHub credential，它什麼都推不出去。
 RUN apt-get update \
@@ -94,13 +94,13 @@ RUN set -eu; \
 # 生圖／改圖的唯一入口。它只用 Python 3 stdlib。
 # root 擁有、0755：agent 可以執行，不能改寫。
 COPY agents/bin/company-image /usr/local/bin/company-image
-COPY agents/bin/slack-thread-artifact /usr/local/bin/slack-thread-artifact
+COPY agents/bin/discord-thread-artifact /usr/local/bin/discord-thread-artifact
 COPY agents/bin/agent-sync /usr/local/bin/agent-sync
 RUN chmod 0755 /usr/local/bin/company-image /usr/local/bin/agent-sync \
     && chown root:root /usr/local/bin/agent-sync \
     && chown root:root /usr/local/bin/company-image \
-    && chmod 0755 /usr/local/bin/slack-thread-artifact \
-    && chown root:root /usr/local/bin/slack-thread-artifact \
+    && chmod 0755 /usr/local/bin/discord-thread-artifact \
+    && chown root:root /usr/local/bin/discord-thread-artifact \
     && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
 
 # /home/node 是 named volume `home`。第一次掛上空 volume 時 Docker 會把 image 內的 /home/node
@@ -119,5 +119,5 @@ RUN if [ "$HOST_GID" != "1000" ]; then groupmod -g "$HOST_GID" node; fi \
 USER node
 RUN company-image --help >/dev/null \
     && python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' /usr/local/bin/agent-sync \
-    && slack-thread-artifact --help >/dev/null \
+    && discord-thread-artifact --help >/dev/null \
     && ! command -v opencode && ! command -v claude

@@ -1,12 +1,12 @@
 # agent-company
 
 這個 repo 是組裝層：把 OpenAB（harness）、agent-config（skills、MCP、規則）、repo snapshots（產品參考）
-組成 Slack 上多人共用的 company agent。定位見 `README.md` 開頭。
+組成 Discord 上多人共用的 company agent。定位見 `README.md` 開頭。
 
 改動前先判斷它屬於哪一層：
 
 - agent 的能力、做事的 SOP、skill、MCP → agent-config，不在這裡另加限制或另抄一份。
-- harness 行為（session、Slack、ACP）→ 照 OpenAB 官方；偏離要有理由並寫 ADR。
+- harness 行為（session、Discord、ACP）→ 照 OpenAB 官方；偏離要有理由並寫 ADR。
 - 只有「怎麼組起來」與「bot 跟維護者機器不同的地方」放這裡：image、mount、資源、排程、`agents/AGENTS.md`。
 
 ## 先讀
@@ -21,7 +21,7 @@
 - `/CLAUDE.md` 是給維護這個 deployment repo 的 agent，也就是你正在讀的檔案。
 - `/agents/AGENTS.md` 是 company agent 的 bot 專屬規則。container 內 `agents/bin/agent-sync` 把它接在維護者個人規則（agent-config 的 `instructions/agents-md/AGENTS.md`）後面，寫成 `~/.codex/AGENTS.md`。只寫跟維護者機器不同的地方。
 
-維護指令寫在這裡，Slack runtime 規則寫在 `agents/AGENTS.md`。
+維護指令寫在這裡，bot runtime 規則寫在 `agents/AGENTS.md`。
 
 ## 唯一正本
 
@@ -29,18 +29,17 @@
 |---|---|
 | 個人 machine dotfiles 與 instructions | `chezmoi` 管理的 personal dotfiles（外部正本，不是本 deployment repo） |
 | Bot 行為（runtime contract） | 個人規則在 agent-config；bot 專屬的在 `agents/AGENTS.md` |
-| Bot 的 skills、MCP 怎麼裝 | `agents/bin/agent-sync` 與 `config/skillshare/config.yaml`（skillshare，跟維護者機器同一套） |
+| Bot 的 skills、MCP 怎麼裝 | `agents/bin/agent-sync` 與 `config/skillshare/config.yaml`（skillshare，跟維護者機器同一套；`exclude` 列 bot 用不了的 skill） |
 | 領域詞彙 | `CONTEXT.md` |
 | 系統行為與能力邊界 | `docs/system-design.md` |
 | 所有版本與 OpenAB image digest | `config/versions.env` |
 | Container 資源與 mount | `compose.yaml` |
-| Slack 存取、session 與 agent process | `config/openab.toml` |
+| Discord 存取、session 與 agent process | `config/openab.toml` |
 | Codex provider、模型與 catalog | `config/codex/`（`config.toml` 是範本，`scripts/deploy.sh` 填入 gateway 位址） |
 | 生圖／改圖能力邊界 | `agents/bin/company-image`（改介面等於改能力） |
-| 檔案回 thread 的格式與路徑 | `agents/bin/slack-thread-artifact` |
+| 檔案回 thread 的格式與路徑 | `agents/bin/discord-thread-artifact` |
 | Snapshot remote 與基準 branch | `config/repos.conf` |
 | Host 排程（snapshot 同步、artifact cleanup、瀏覽器分頁回收） | `scripts/lib.sh` 的 `render_crontab` |
-| PM 在 Slack Home 看到的能力說明 | `config/slack-home.json`（改 `repos.conf` 或 bot 能力要一起看這份） |
 | Skill、MCP 與個人規則 | `agent-config`（public repo；bot 與維護者機器共用） |
 | Deployment host 操作步驟 | `docs/runbook.md` |
 
@@ -62,20 +61,20 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 - `chrome` sidecar 的 image 是 headless-shell 加一層中文字型（`chrome/Dockerfile`），不直接 pull。base 與字型版本都在 `config/versions.env`；理由見 `docs/adr/0014-add-cjk-fonts-to-the-chrome-sidecar.md`。
 - `config/openab.toml` 給 codex-acp 加 `CODEX_INTERNAL_ORIGINATOR_OVERRIDE = "codex_exec"`。少了它，gateway 會不定期對 bot 回 `gpt-6.1-sol` `model_not_found`；理由見 `docs/adr/0013-send-a-codex-originator-to-the-gateway.md`。
 - 生圖／改圖只走 `company-image`，參數維持 prompt、size、來源圖片。endpoint、header、model、輸出路徑留在 CLI 內；理由見 `docs/adr/0008-restricted-company-image-cli.md`。
-- `company-image` 與 `slack-thread-artifact` 的路徑處理固定從 root 開 dirfd、逐段 `O_DIRECTORY|O_NOFOLLOW`；刪除用同一個 parent fd 並比對檔案 identity；寫入用 `O_CREAT|O_EXCL|O_NOFOLLOW` 加 temp→fsync→rename。`tests/artifact-path-safety.py` 會擋 `resolve()` 或字串比對後再開檔的寫法。
+- `company-image` 與 `discord-thread-artifact` 的路徑處理固定從 root 開 dirfd、逐段 `O_DIRECTORY|O_NOFOLLOW`；刪除用同一個 parent fd 並比對檔案 identity；寫入用 `O_CREAT|O_EXCL|O_NOFOLLOW` 加 temp→fsync→rename。`tests/artifact-path-safety.py` 會擋 `resolve()` 或字串比對後再開檔的寫法。
 
 ## 不可破壞的邊界
 
 - Container 裡沒有 GitHub token 或 SSH key，也不掛 Docker socket。GitHub SSH key 只供 deployment host 的 snapshot 同步，不進 Compose env 或 volume。agent 的 code 改動以 `.patch` 交回 thread，由人 push。
-- `WORK_HELPER_ISSUE_MODE` 必須是 `manual`。遠端 agent 不建立 GitHub issue，也不執行驗收回報。
-- OpenAB image 固定 immutable digest，正本在 `config/versions.env`；Compose 的 checked-in build args 同步更新。升級時先確認新版本 Slack config 與 multi-arch manifest。Build 只用固定版本，Compose 可直接執行。
+- OpenAB image 固定 immutable digest，正本在 `config/versions.env`；Compose 的 checked-in build args 同步更新。升級時先確認新版本 Discord config 與 multi-arch manifest。Build 只用固定版本，Compose 可直接執行。
 - Codex 與 codex-acp 以固定版本裝在 `/opt/codex-<ver>`，`config/openab.toml` 的 `CODEX_PATH` 指到同一版。
 - 公司 gateway 只提供 Responses API：`config/codex/config.toml` 維持 `wire_api = "responses"`。`COMPANY_GATEWAY_BASE_URL` 是 gateway 提供 `/responses` 的前綴（不是 `/v1`），Codex 與 `company-image` 共用同一個值。理由見 `docs/adr/0010-company-provider-uses-the-responses-api.md`。
-- Slack bot token、公司 gateway key 與 agent 執行的 repo code 在同一個 container，這是已決定的取捨（ADR 0012）。文件照實寫，不宣稱有 broker、proxy 或 token 隔離。
-- 「產物回原本那個 Slack thread」只能寫成單一 container 內 OpenAB `sender_context`、agent 與受限 CLI 之間的信任約定，**不是安全保證**。理由見 `docs/adr/0009-thread-artifact-upload-and-optional-stt.md`。
-- 上傳失敗的 artifact 由 host crontab 收。`scripts/cleanup-artifacts.sh` 維持呼叫 container 內的 `/home/node/snapshots/agent-config/skills/slack-list/scripts/slack-list cleanup`，刪除規則的正本在 agent-config。
-- `tests/static.sh` 與 `scripts/deploy.sh` 只宣稱驗過離線能驗的事；Slack、公司 gateway、STT、cron 觸發屬於 `docs/runbook.md`「人工 release gate」。
-- `allow_all_users = true` 讓同一個 Slack workspace 的使用者可驅動 agent；實際入口仍受 Slack app 收到的 DM、channel、thread 事件範圍限制。
+- Discord bot token、公司 gateway key 與 agent 執行的 repo code 在同一個 container，這是已決定的取捨（ADR 0012）。文件照實寫，不宣稱有 broker、proxy 或 token 隔離。
+- 「產物回原本那個 Discord thread」只能寫成單一 container 內 OpenAB `sender_context`、agent 與受限 CLI 之間的信任約定，**不是安全保證**。理由見 `docs/adr/0009-thread-artifact-upload-and-optional-stt.md`。
+- 上傳失敗的 artifact 由 host crontab 收。`scripts/cleanup-artifacts.sh` 在 container 內跑 GNU `find -type f -delete`（不追 symlink）；換成別的刪法要保住同樣的保證。
+- `tests/static.sh` 與 `scripts/deploy.sh` 只宣稱驗過離線能驗的事；Discord、公司 gateway、STT、cron 觸發屬於 `docs/runbook.md`「人工 release gate」。
+- `allow_all_users = true` 讓同一個 Discord server 的成員可驅動 agent；實際入口仍受 bot 被邀進哪些頻道限制。
+- `allow_dm = true` 必須維持：接同事 Chrome、Windows 的網址與 key 只在 DM 交付。
 - `allow_all_channels = true` 仍須維持；改這一項前先讀 `docs/system-design.md` 的「互動入口」。
 
 ## 修改規則
@@ -83,7 +82,7 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 - 不提交 `env/openab.env`、credentials、private key 或真實 token。
 - 改 Compose mount 時，同步檢查 nested mount 的深度、`home` volume 初次複製的 ownership（Dockerfile 先建好 mount point），與 host 目錄 ownership。
 - 改 snapshot 路徑或 branch 時，同時更新 `config/repos.conf`、preflight 與 runbook。
-- 改 Slack 能力時，同時檢查 bot events、OAuth scopes、OpenAB config 及人工驗收情境。
+- 改 Discord 能力時，同時檢查 Developer Portal 的 intent 與 bot 權限、OpenAB config 及人工驗收情境。
 - 不直接在 deployment host 修 repo 內檔案；這個 repo 是部署設定的正本。
 - 文件、issue 與 commit 一律用角色名稱「deployment host」稱呼部署機。實際是哪台不寫進 repo（repo 是 public，機器也會換）；要操作前先問維護者，或在候選機器上用 `docker ps --filter name=agent-company` 確認 container 真的在那裡。
 - 沒有使用者明確要求，不建立 remote、不 commit、不 push、不部署。
@@ -95,7 +94,7 @@ bot 的 skills、MCP 與個人規則跟維護者機器用同一份 `agent-config
 從主 checkout 複製一份（它只有路徑與 uid）。
 
 `tests/static.sh` 最後印出「LIMITED VERIFICATION」時，列出的項目就是沒驗到，回報時照實說。
-它的測試全部 mocked，不呼叫 Slack 或公司 gateway。
+它的測試全部 mocked，不呼叫 Discord 或公司 gateway。
 
 跑得過**不代表**這一版可以放給人用。人工能驗的清單在 `docs/runbook.md`「人工 release gate」，
 與 `scripts/deploy.sh` 結尾印出的清單一致。回報時照實說哪些沒驗到，不要把 `static.sh` 或

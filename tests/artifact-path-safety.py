@@ -5,7 +5,7 @@
 檢查之後被換掉），所以失敗是可重現的，不是「看起來有處理」。不開 socket、不需要
 Docker、不需要真的 key：`urlopen` 換成假物件。
 
-這裡驗的是「不會逃出固定 root」與「不會誤刪」，不驗 Slack 或 gateway 真的接受請求。
+這裡驗的是「不會逃出固定 root」與「不會誤刪」，不驗 Discord 或 gateway 真的接受請求。
 """
 
 from __future__ import annotations
@@ -26,13 +26,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ARTIFACT_CLI = ROOT / "agents/bin/slack-thread-artifact"
+ARTIFACT_CLI = ROOT / "agents/bin/discord-thread-artifact"
 IMAGE_CLI = ROOT / "agents/bin/company-image"
 TOKEN = "test-token-not-a-secret"
 FAKE_KEY = "test-key-not-a-real-secret"
 FAKE_BASE_URL = "https://gateway.example.invalid/v1"
-CHANNEL = "C0123456789"
-THREAD_TS = "1710000000.123456"
+CHANNEL = "111111111111111111"
+THREAD = "222222222222222222"
 
 failures: list[str] = []
 
@@ -121,29 +121,18 @@ class Response:
         return False
 
 
-class Slack:
-    """假 Slack。`tamper` 讓 case 在上傳流程中間動手腳，模擬 check/use race。"""
+class Discord:
+    """假 Discord。`tamper` 在上傳那個 POST 進來時動手腳，模擬 check/use race。"""
 
-    def __init__(self, tamper=None, tamper_at: int = 3):
+    def __init__(self, tamper=None):
         self.requests: list = []
-        self.tamper, self.tamper_at = tamper, tamper_at
+        self.tamper = tamper
 
     def __call__(self, request, timeout=None):
         self.requests.append(request)
-        index = len(self.requests)
-        if self.tamper is not None and index == self.tamper_at:
+        if self.tamper is not None and request.get_method() == "POST":
             self.tamper()
-        if index == 1:
-            return Response(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "upload_url": "https://uploads.slack.test/upload",
-                        "file_id": "F123",
-                    }
-                ).encode()
-            )
-        return Response()
+        return Response(json.dumps({"id": "9", "attachments": [{"id": "1"}]}).encode())
 
 
 class Gateway:
@@ -184,7 +173,7 @@ class Gateway:
 
 
 def artifact_cases(cli, workdir: Path) -> None:
-    os.environ["SLACK_BOT_TOKEN"] = TOKEN
+    os.environ["DISCORD_BOT_TOKEN"] = TOKEN
 
     def fresh() -> tuple[Path, Path]:
         """每個 case 一組乾淨的 drafts／outside，避免互相污染。"""
@@ -195,14 +184,14 @@ def artifact_cases(cli, workdir: Path) -> None:
         cli.DRAFTS_ROOT = drafts
         return drafts, outside
 
-    def upload(argv: list[str], tamper=None) -> tuple[int, str, str, Slack]:
-        fake = Slack(tamper)
+    def upload(argv: list[str], tamper=None) -> tuple[int, str, str, Discord]:
+        fake = Discord(tamper)
         cli.urlopen = fake
         code, out, err = run(cli, argv)
         return code, out, err, fake
 
     def argv_for(path: Path) -> list[str]:
-        return ["--file", str(path), "--channel", CHANNEL, "--thread-ts", THREAD_TS]
+        return ["--file", str(path), "--channel", CHANNEL, "--thread", THREAD]
 
     # 1. 父目錄被換成 symlink。逐段 O_NOFOLLOW 必須擋在最後一段之前。
     drafts, outside = fresh()
@@ -212,7 +201,7 @@ def artifact_cases(cli, workdir: Path) -> None:
     (drafts / today()).symlink_to(outside / "day")
     code, _, err, fake = upload(argv_for(drafts / today() / "secret.md"))
     check("parent-dir symlink is rejected", code == cli.EXIT_INVALID_INPUT, f"exit={code}")
-    check("parent-dir symlink never reaches Slack", not fake.requests)
+    check("parent-dir symlink never reaches Discord", not fake.requests)
     check("parent-dir symlink leaves the target alone", secret.is_file())
     check("parent-dir symlink error names the symlink", "symlink" in err, err.strip())
 
@@ -223,7 +212,7 @@ def artifact_cases(cli, workdir: Path) -> None:
     (drafts / "link.png").symlink_to(target)
     code, _, _, fake = upload(argv_for(drafts / "link.png"))
     check("symlinked artifact is rejected", code == cli.EXIT_INVALID_INPUT, f"exit={code}")
-    check("symlinked artifact never reaches Slack", not fake.requests)
+    check("symlinked artifact never reaches Discord", not fake.requests)
     check("symlinked artifact leaves the target alone", target.is_file())
 
     # 3. 字面上的 `..` 逃逸，normpath 之後就不在 root 底下了。
@@ -232,7 +221,7 @@ def artifact_cases(cli, workdir: Path) -> None:
     escape.write_text("# host secret")
     code, _, _, fake = upload(argv_for(Path(f"{drafts}/{today()}/../../outside/secret.md")))
     check("dot-dot escape is rejected", code == cli.EXIT_INVALID_INPUT, f"exit={code}")
-    check("dot-dot escape never reaches Slack", not fake.requests)
+    check("dot-dot escape never reaches Discord", not fake.requests)
     check("dot-dot escape leaves the target alone", escape.is_file())
 
     # 4. drafts root 自己被換成 symlink：這是環境問題，不是輸入問題。
@@ -243,7 +232,7 @@ def artifact_cases(cli, workdir: Path) -> None:
     planted.write_text("# draft")
     code, _, _, fake = upload(argv_for(drafts / "planted.md"))
     check("symlinked drafts root is refused", code == cli.EXIT_RUNTIME, f"exit={code}")
-    check("symlinked drafts root never reaches Slack", not fake.requests)
+    check("symlinked drafts root never reaches Discord", not fake.requests)
     check("symlinked drafts root deletes nothing", planted.is_file())
 
     # 5. 沒有人動手腳：成功上傳後檔案要真的被刪掉（不誤留）。
@@ -296,7 +285,7 @@ def artifact_cases(cli, workdir: Path) -> None:
     drafts, _ = fresh()
     kept = drafts / "kept.md"
     kept.write_text("# draft")
-    fake = Slack()
+    fake = Discord()
 
     def boom(request, timeout=None):
         fake.requests.append(request)
@@ -476,7 +465,7 @@ def image_cases(cli, workdir: Path) -> None:
 def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="artifact-path-safety-"))
     try:
-        artifact_cases(load(ARTIFACT_CLI, "slack_artifact"), workdir)
+        artifact_cases(load(ARTIFACT_CLI, "discord_artifact"), workdir)
         image_cases(load(IMAGE_CLI, "company_image"), workdir)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -486,7 +475,7 @@ def main() -> int:
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         return 1
-    print("Artifact path-safety checks passed (mocked Slack and gateway; no real call was made).")
+    print("Artifact path-safety checks passed (mocked Discord and gateway; no real call was made).")
     return 0
 
 

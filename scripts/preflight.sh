@@ -21,15 +21,15 @@ fail() {
 [[ $(stat -c '%a' "$ENV_FILE") =~ ^(600|640)$ ]] || fail "$ENV_FILE must have mode 600 or 640"
 
 required_keys=(
-  SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_LIST_ID SLACK_TEAM_ID SLACK_WORKSPACE_URL WORK_HELPER_ISSUE_MODE
+  DISCORD_BOT_TOKEN
   COMPANY_GATEWAY_BASE_URL COMPANY_GATEWAY_API_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
 )
 for key in "${required_keys[@]}"; do
   grep -q "^${key}=." "$ENV_FILE" || fail "$key is missing from $ENV_FILE"
 done
-grep -q '^WORK_HELPER_ISSUE_MODE=manual$' "$ENV_FILE" || fail "WORK_HELPER_ISSUE_MODE must be manual"
-grep -q '^SLACK_BOT_TOKEN=xoxb-' "$ENV_FILE" || fail "SLACK_BOT_TOKEN must start with xoxb-"
-grep -q '^SLACK_APP_TOKEN=xapp-' "$ENV_FILE" || fail "SLACK_APP_TOKEN must start with xapp-"
+# Discord bot token 是三段 base64url 用點接起來，不是 xoxb-／xapp- 那種前綴。
+grep -Eq '^DISCORD_BOT_TOKEN=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' "$ENV_FILE" ||
+  fail "DISCORD_BOT_TOKEN must be a Discord bot token (three dot-separated parts)"
 # Codex and company-image both append /responses to this prefix (ADR 0010).
 grep -Eq '^COMPANY_GATEWAY_BASE_URL=https://[^[:space:]]+[^/]$' "$ENV_FILE" ||
   fail "COMPANY_GATEWAY_BASE_URL must be an https URL without a trailing slash"
@@ -103,7 +103,7 @@ for entry in "$SNAPSHOT_ROOT"/*; do
   [[ -n ${expected[$name]:-} ]] || fail "$entry is not listed in config/repos.conf but would be mounted"
 done
 
-# R2 lifecycle and Slack files:read are one-time external settings that no API here can
+# R2 lifecycle and the Discord Message Content Intent are one-time external settings that no API here can
 # check. They live in the runbook's first-time setup, not in every deploy, so deploys can
 # run unattended.
 
