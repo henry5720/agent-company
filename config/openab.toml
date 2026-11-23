@@ -34,7 +34,7 @@ inherit_env = [
   "CONTEXT7_API_KEY",
   # agent-config mcp.yaml 的 graphify 用 fromEnv 讀它；沒設時 graphify 連不上，其他 MCP 照常。
   "GRAPHIFY_API_KEY",
-  # discord-thread-artifact 用它把檔案傳回原 thread。
+  # agent 用它打 Discord API 把檔案傳回 thread、判斷 DM（OpenAB 只串流文字，不轉檔，見 OpenAB docs/codex.md）。
   "DISCORD_BOT_TOKEN",
 ]
 

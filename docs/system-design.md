@@ -74,7 +74,7 @@ Working tree 停在基準 branch，但 `.git` 內保有完整的 `origin/*` refs
 1. agent 把 snapshot clone 到 home：`git clone /home/node/snapshots/<repo> /home/node/<目錄>/<repo>`。
 2. 在副本裡改 code、用 pnpm／npm 安裝套件、跑測試或 dev server。工具都裝在 home；image 不給 `apt`，缺系統套件要由部署維護者加進 image。
 3. dev server 只有 container 內看得到，要給人看就截圖回 thread。預覽網址（內網穿透）之後另做。
-4. 改好的 code 用 `git format-patch` 寫進 `/home/node/drafts/<UTC 日期>/`，再用 `discord-thread-artifact` 上傳到原 thread。
+4. 改好的 code 用 `git format-patch` 寫進 `/home/node/drafts/<UTC 日期>/`，再用 Discord API 上傳到原 thread。
 5. 人在自己的電腦套用 patch、review、push。agent 不說「已修好」「已上線」。
 
 home 是所有 thread 共用的空間，沒有自動清理；clone 與套件快取會累積，volume 變大時再加清理。
@@ -85,11 +85,11 @@ Discord 的 native 輸入是 text、image。PDF、DOCX、XLSX、PPTX 這類附�
 
 R2 filestore 的設定正本是 `config/openab.toml` 的 `[filestore]`。R2 access key 與 secret key 只透過 `${R2_ACCESS_KEY_ID}`／`${R2_SECRET_ACCESS_KEY}` interpolation 從未追蹤的 `env/openab.env` 取得，不寫入 repo。R2 bucket 必須在外部設定 `incoming/` prefix 的 1 天 lifecycle expiration。preflight 不嘗試用 Cloudflare API 驗證它；這是 runbook 的一次性設定，deploy 不逐次確認。
 
-輸出是 Discord 訊息本文、PNG、`.patch` 與 Markdown 檔，單檔 10 MiB 以內（沒有 boost 的 server 上限）。self-contained HTML 只有在使用者明確要求 prototype 或可互動頁面時才輸出，而且必須是單一檔案。所有產物回到發問的那個 Discord thread（DM 就回 DM）；`discord-thread-artifact` 成功上傳才刪暫存，失敗保留交 host cleanup。「回原 thread」是同一個 container 內的信任約定，不是安全保證，細節見下面「『回原 thread』靠的是什麼」。
+輸出是 Discord 訊息本文、PNG、`.patch` 與 Markdown 檔，單檔 10 MiB 以內（沒有 boost 的 server 上限）。self-contained HTML 只有在使用者明確要求 prototype 或可互動頁面時才輸出，而且必須是單一檔案。所有產物回到發問的那個 Discord thread（DM 就回 DM）；檔案留在 drafts，由 host cleanup 24 小時後刪。「回原 thread」是同一個 container 內的信任約定，不是安全保證，細節見下面「『回原 thread』靠的是什麼」。
 
 圖片**產出**走 `company-image`：一支裝在 image 內的受限 CLI，在同一個 container 完成，沒有獨立的 artifact broker。它只有 `generate` 與 `edit` 兩個 mode，只收 prompt、允許清單內的 size 與（`edit` 用的）來源圖片路徑；沒有 endpoint、header、model 或輸出路徑參數，gateway 位置與 key 只從 runtime env 讀。請求固定用公司 gateway 的 Responses API `image_generation` tool，輸出固定是 PNG，固定寫到 `/home/node/drafts/<UTC 日期>/`。回應的兩種形狀都吃：一般 JSON body 與 `text/event-stream` 的 SSE（實測公司 gateway 回的是後者，圖在 `partial_image_b64`）—— 用回應的 Content-Type 決定怎麼讀，兩條路徑都要過同一組 base64 解碼與 PNG magic 檢查才寫檔。介面就是能力上限：多一個尺寸都要改 repo 重新 build。agent 被要求只用這一支產圖，不自己打 gateway。理由與拒絕的替代方案見 [`adr/0008-restricted-company-image-cli.md`](adr/0008-restricted-company-image-cli.md)。
 
-產物用 `discord-thread-artifact --file <drafts 下的檔> --channel <channel_id> --message <message_id> [--thread <thread_id>]` 回原 thread。它只讀 drafts 下的 regular `.png`、`.md`、`.html`、`.patch`，成功才刪檔。送到哪裡照 `<sender_context>` 的欄位決定：
+OpenAB 只把文字串流回 Discord，不轉檔（OpenAB [docs/codex.md](https://github.com/openabdev/openab/blob/v0.10.0-beta.3/docs/codex.md#sending-generated-images-back-to-discord)）。agent 照官方寫法自己打 Discord API：`curl -X POST /channels/<目標>/messages -F "files[0]=@<檔>"`，token 用 `inherit_env` 傳進來的 `DISCORD_BOT_TOKEN`，指令照 `agents/AGENTS.md`〈傳回 thread〉。目標照 `<sender_context>` 的欄位決定：
 
 | `<sender_context>` | 送到 |
 |---|---|
@@ -97,24 +97,21 @@ R2 filestore 的設定正本是 `config/openab.toml` 的 `[filestore]`。R2 acce
 | 沒有 `thread_id`，`channel_id` 是 DM | 那個 DM |
 | 沒有 `thread_id`，在一般 channel | `message_id`：OpenAB 從觸發訊息開 thread，thread ID 就是那則訊息的 ID |
 
-DM 與否 ID 本身看不出來，CLI 用 `GET /channels/{id}` 的 type 判斷；`--check-dm --channel <id>` 只印 `dm` 或 `channel`，agent 接同事 Chrome、Windows 前用它確認在 DM。上傳是一個 multipart `POST /channels/{id}/messages`：`payload_json` 帶顯示檔名並關掉 mention，`files[0]` 帶原始 bytes。
+DM 與否 ID 本身看不出來，agent 用 `GET /channels/{id}` 的 `type`（1 = DM）判斷；接同事 Chrome、Windows 前也靠它確認在 DM。理由見 [`adr/0018-upload-files-the-official-openab-way.md`](adr/0018-upload-files-the-official-openab-way.md)。
 
 ### 「回原 thread」靠的是什麼
 
 **這是信任約定，不是安全保證。** 說清楚它由什麼組成：
 
 - OpenAB 把當次的 sender、`channel_id`、`message_id`（在 thread 裡再加 `thread_id`）寫進 prompt 裡的 `<sender_context>`。那是 **prompt content**，不是 ACP side-channel，也不是不可竄改的授權資料。
-- agent 讀那段文字，再把 `--channel`、`--message`、`--thread` 逐字交給 CLI。這一步由 `agents/AGENTS.md` 的文字約束，不由任何機制強制。
-- CLI 只檢查格式（17 到 20 位數字的 Discord ID），不能判斷這組值是不是本次 sender 真正的 thread。
-- 三者在**同一個 container** 內，共用同一個 `DISCORD_BOT_TOKEN`。
+- agent 讀那段文字，再把目標 ID 逐字填進 curl。這一步由 `agents/AGENTS.md` 的文字約束，不由任何機制強制，也沒有任何一段檢查這個 ID 是不是本次 sender 真正的 thread。
+- 兩者在**同一個 container** 內，共用同一個 `DISCORD_BOT_TOKEN`。
 
-所以能被信任的原因是「這三段都在同一個信任域內」，不是任何一段驗證了另一段。**不宣稱** token isolation、cryptographic binding，也**不宣稱**擋得住 prompt injection：能改變 agent 送出什麼值的輸入，就能改變檔案送到哪個 thread（限於這個 bot token 本來就進得去的 conversation）。agent 讀得到 token，本來就能繞過 CLI。
+所以能被信任的原因是「這兩段都在同一個信任域內」，不是任何一段驗證了另一段。**不宣稱** token isolation、cryptographic binding，也**不宣稱**擋得住 prompt injection：能改變 agent 送出什麼值的輸入，就能改變檔案送到哪個 thread（限於這個 bot token 本來就進得去的 conversation）。以前包一支受限 CLI 也換不到更多保證，因為 agent 讀得到 token，本來就能繞過它（[`adr/0018-upload-files-the-official-openab-way.md`](adr/0018-upload-files-the-official-openab-way.md)）。
 
-CLI 的價值只在縮小正常操作下的副作用：拿掉任意 URL、header、命令與輸出路徑的自由度，並且把檔案來源鎖在 drafts。這不是把 prompt context 變成安全邊界。
+刻意**不**改成 broker 或 relay：那要另一個 process 持有 token 並自己判斷 thread 歸屬，而判斷依據仍然只有 OpenAB 給的同一份 context，換不到新的保證，只多一層要維護的東西。取捨見 [`adr/0009-thread-artifact-upload-and-optional-stt.md`](adr/0009-thread-artifact-upload-and-optional-stt.md)。
 
-刻意**不**改成 broker 或 relay：那要另一個 process 持有 token 並自己判斷 thread 歸屬，而判斷依據仍然只有 OpenAB 給的同一份 context，換不到新的保證，只多一層要維護的東西。完整取捨見 [`adr/0009-thread-artifact-upload-and-optional-stt.md`](adr/0009-thread-artifact-upload-and-optional-stt.md)。
-
-上傳失敗時 artifact 暫存檔保留，由 deployment host 的 `# agent-company-artifact-cleanup` crontab entry（`scripts/cleanup-artifacts.sh` → container 內 `find /home/node/drafts -mindepth 1 -type f -mmin +1440 -delete`，每小時 :17；GNU find 預設不追 symlink）收掉；保留期限 24 小時，檢查每小時一次，所以實際壽命是 24 到 25 小時。
+drafts 裡的檔案（上傳不刪）由 deployment host 的 `# agent-company-artifact-cleanup` crontab entry（`scripts/cleanup-artifacts.sh` → container 內 `find /home/node/drafts -mindepth 1 -type f -mmin +1440 -delete`，每小時 :17；GNU find 預設不追 symlink）收掉；保留期限 24 小時，檢查每小時一次，所以實際壽命是 24 到 25 小時。
 
 Audio 不支援：OpenAB 沒設 STT，收到音檔會加 🎤 reaction 並略過。
 
@@ -160,7 +157,7 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
 - Container 有 CPU、記憶體與 pids 上限（見 `compose.yaml`），agent 跑爆時只殺自己，不拖垮 host。
 - Skill、MCP 與個人規則的正本是 public repo `agent-config`（由 skillshare 管理），bot 跟維護者機器用同一份，不另裁。在 agent-config 新增的 skill 或 MCP，最晚一小時後 bot 也有；需要這個環境沒有的工具或權限（GitHub 寫入、herdr）的 skill 在這裡會失敗。bot 專屬的限制寫在 `agents/AGENTS.md`。
 - OpenAB image 使用固定 multi-arch digest，不跟浮動 tag 更新。
-- `company-image` 與 `discord-thread-artifact` 由 root 擁有、mode 0755，agent 只能執行不能改寫；build 時各跑一次 `--help`，語法或 Python 版本不合會 build 失敗。
+- `company-image` 由 root 擁有、mode 0755，agent 只能執行不能改寫；build 時跑一次 `--help`，語法或 Python 版本不合會 build 失敗。
 
 ## 明確不做
 
@@ -184,17 +181,16 @@ Codex CLI 與 codex-acp 由 Dockerfile 以固定版本裝進 `/opt/codex-<版本
 5. `./scripts/deploy.sh` 驗到 PATH 上的 `codex-acp` 與 `CODEX_PATH` 指向 `/opt/codex-<CODEX_VERSION>`、兩者版本等於 `config/versions.env`、`/etc/openab/config.toml` 的 agent 是 `codex-acp`、Codex provider 設定已填入 gateway 位址且唯讀、cloudflared 版本等於 `config/versions.env`，退場的 runtime 不在 PATH 上。
 6. 模型推論直連公司 gateway：一個 Discord 問題得到回答、開頭沒有 model metadata warning，shell tool call 可用。
 7. 圖片附件能進到模型；文件附件由 agent 從 OpenAB 提供的 R2 URL 下載轉文字後回答，轉不出來時明說。
-8. 一般請求得到 PNG；明確要求 prototype 時才得到單一檔案的 HTML；都由受限 uploader 回原 thread。
+8. 一般請求得到 PNG；明確要求 prototype 時才得到單一檔案的 HTML；都由 agent 用 Discord API 傳回原 thread。
 9. 要求改一個 repo 的小地方時，agent 從 `/home/node/snapshots` clone、跑 `pnpm install`，並把 `.patch` 上傳到原 thread。
 10. `company-image generate` 在 container 內產出 PNG 到 `/home/node/drafts/<UTC 日期>/`；非法 size、走出 drafts 的檔名、允許範圍外的來源圖片都被拒絕且不發出 gateway 請求。靜態部分由 `tests/image-runtime.py` 用假 gateway 驗，真的 gateway 回得回圖要在有 key 的環境實跑一次。
-11. `discord-thread-artifact` 只接受 drafts 下的 regular `.png`、`.md`、`.html`、`.patch`，單檔 10 MiB 以內；thread 裡送到 `thread_id`、DM 送回 DM、channel 第一則送到 `message_id`，成功後刪檔，失敗不刪檔。`tests/discord-thread-artifact.py` 用假 Discord 驗這三種路由、multipart body 與失敗留檔；真的 Discord 收不收要在有 token 的環境實傳一次。
-12. 兩支 CLI 都走不出固定 root：父目錄被換成 symlink、檔名本身是 symlink、路徑用 `..` 逃逸，都被拒絕且不發出任何 Discord 或 gateway 請求。`company-image` 的目標檔名被事先種成指向外面的 symlink 時，寫到下一個可用檔名，不寫穿它。由 `tests/artifact-path-safety.py` 重現。
-13. 上傳成功後暫存檔被刪；但暫存檔在讀取之後被換成別的檔案或 symlink 時，**不刪**那個東西，在 stderr 說明並仍 exit 0（檔案確實送出去了，回非零只會讓 agent 重傳）。
-14. Deployment host 的 crontab 有 `# agent-company-artifact-cleanup` entry，每小時執行 `scripts/cleanup-artifacts.sh`，它在 container 內用 `find` 刪掉 drafts 裡超過 24 小時的檔；container 沒在跑時這一輪失敗會寫進 `artifact-cleanup.log` 並回非零。排程存在由 `tests/static.sh` render `render_crontab` 驗；cron 真的觸發過只能人工確認。
-15. `tests/static.sh` 與 `scripts/deploy.sh` 都不聲稱驗過 Discord、公司 gateway 或 cron 觸發；`deploy.sh` 結束時印出未驗清單，對應 [`runbook.md`](runbook.md#人工-release-gate) 的「人工 release gate」。
-16. 同事在 DM 請 agent 接他的瀏覽器，照回覆的四步（裝 cloudflared、跑 `cloudflared access tcp`、開獨立 profile 並裝 Playwright Extension、在插件貼 connect 網址）就接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址。只能人工驗收；cloudflared 版本由 `deploy.sh` 驗。
-17. 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢。只能人工驗收；`mcpdo` 跑得起來由 `deploy.sh` 驗，接法在本機用假 MCP server 驗過（ADR 0015）。
-18. 兩個 thread 各開瀏覽器：A 登入某網站後，B 的 context 沒有那份登入。thread 做完 `close` 後，它的 context 與分頁從 sidecar 消失；沒 close 的 daemon 閒置 4 小時後自己結束，context 一起收掉。default context 裡 4 小時網址沒變的分頁，在下一次 `# agent-company-browser-reap` 被關，isolated context 不受影響。排程存在與判斷規則由 `tests/static.sh` 驗；閒置收回在 sidecar 上以短 timeout 實測過（ADR 0016），正式 4 小時與 cron 觸發只能人工確認。
+11. 檔案傳回目標：thread 裡送到 `thread_id`、DM 送回 DM、channel 第一則送到 `message_id`。由 agent 照 `agents/AGENTS.md` 執行，沒有離線測試，靠人工 release gate 第 2 項實傳。
+12. `company-image` 走不出固定 root：父目錄被換成 symlink、檔名本身是 symlink、路徑用 `..` 逃逸，都被拒絕且不發出任何 gateway 請求。`company-image` 的目標檔名被事先種成指向外面的 symlink 時，寫到下一個可用檔名，不寫穿它。由 `tests/artifact-path-safety.py` 重現。
+13. Deployment host 的 crontab 有 `# agent-company-artifact-cleanup` entry，每小時執行 `scripts/cleanup-artifacts.sh`，它在 container 內用 `find` 刪掉 drafts 裡超過 24 小時的檔；container 沒在跑時這一輪失敗會寫進 `artifact-cleanup.log` 並回非零。排程存在由 `tests/static.sh` render `render_crontab` 驗；cron 真的觸發過只能人工確認。
+14. `tests/static.sh` 與 `scripts/deploy.sh` 都不聲稱驗過 Discord、公司 gateway 或 cron 觸發；`deploy.sh` 結束時印出未驗清單，對應 [`runbook.md`](runbook.md#人工-release-gate) 的「人工 release gate」。
+15. 同事在 DM 請 agent 接他的瀏覽器，照回覆的四步（裝 cloudflared、跑 `cloudflared access tcp`、開獨立 profile 並裝 Playwright Extension、在插件貼 connect 網址）就接上；`tab-new` 兩次後 `tab-list` 列出 3 個分頁；detach 後 tunnel 網址從公網打回 530。同樣的請求在 channel 提出時，agent 請對方改到 DM，channel 裡沒有 connect 網址。只能人工驗收；cloudflared 版本由 `deploy.sh` 驗。
+16. 同事在 DM 交來 windows-mcp 的 quick tunnel 網址和 key，agent 用 `mcpdo` 接上，截一張桌面圖回 thread；同事收掉 server、換 key 後，網址從公網打回 530，舊 key 作廢。只能人工驗收；`mcpdo` 跑得起來由 `deploy.sh` 驗，接法在本機用假 MCP server 驗過（ADR 0015）。
+17. 兩個 thread 各開瀏覽器：A 登入某網站後，B 的 context 沒有那份登入。thread 做完 `close` 後，它的 context 與分頁從 sidecar 消失；沒 close 的 daemon 閒置 4 小時後自己結束，context 一起收掉。default context 裡 4 小時網址沒變的分頁，在下一次 `# agent-company-browser-reap` 被關，isolated context 不受影響。排程存在與判斷規則由 `tests/static.sh` 驗；閒置收回在 sidecar 上以短 timeout 實測過（ADR 0016），正式 4 小時與 cron 觸發只能人工確認。
 
 ## 人工前置作業
 

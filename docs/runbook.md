@@ -86,7 +86,7 @@ R2_SECRET_ACCESS_KEY=<Cloudflare R2 secret key>
 1. DM 詢問一個 repo 問題。
 2. 在 channel @ bot 問一個問題，確認它從你那則訊息開 thread 回答；在 thread 裡不 @ 再問一句，確認它接著回。
 3. 傳一張截圖問問題，確認圖片有被讀到；再傳一份 PDF 或 DOCX，確認 bot 讀了內容後回答。
-4. 要一張圖，確認 bot 用 `company-image` 產出 PNG，再用 `discord-thread-artifact` 回原處。三個地方各試一次：channel 裡 @ bot 的第一則、同一個 thread 的後續、DM。明確要求「可互動 prototype」時才上傳單一檔案 HTML。上傳成功後確認 drafts 原檔被刪；讓 Discord API 故意失敗一次（例如在 container 裡手動跑 `discord-thread-artifact`，`--thread` 帶一個 bot 進不去的 ID），確認原檔保留給 cleanup。
+4. 要一張圖，確認 bot 用 `company-image` 產出 PNG，再用 Discord API 傳回原處。三個地方各試一次：channel 裡 @ bot 的第一則、同一個 thread 的後續、DM。明確要求「可互動 prototype」時才上傳單一檔案 HTML。
 5. 要求改某個 repo 的一個小地方，確認 agent 從 `/home/node/snapshots` clone 到 home、跑 `pnpm install`，並把 `.patch` 上傳到同一個 thread。在自己的電腦用 `git am` 套得上才算過。
 
 停止 local instance：
@@ -170,9 +170,7 @@ docker compose -f ./compose.yaml exec agent sh -lc \
    test ! -e /home/node/.config/gh &&
    ! gh auth status >/dev/null 2>&1 &&
    command -v company-image >/dev/null &&
-   command -v discord-thread-artifact >/dev/null &&
    test ! -w /usr/local/bin/company-image &&
-   test ! -w /usr/local/bin/discord-thread-artifact &&
    codegraph explore boot -p /home/node/snapshots/agent-config >/dev/null'
 ```
 
@@ -198,7 +196,7 @@ docker compose -f ./compose.yaml exec agent sh -lc \
 | # | 要驗什麼 | 怎麼驗 | 為什麼自動化驗不到 |
 |---|---|---|---|
 | 1 | Discord 往返 | channel 裡 @ bot 會開 thread 回答；thread 裡不 @ 也會接著回；DM 有回應 | 需要真的 Discord server |
-| 2 | Artifact 回原處 | 上面「在 Discord 確認」第 4 項：channel 第一則、thread 後續、DM 三處的檔案都出現在原處、drafts 原檔被刪；刻意失敗一次確認留檔 | 需要真的 `DISCORD_BOT_TOKEN` 與真的 thread；離線測試只用假 Discord |
+| 2 | 檔案回原處 | 上面「在 Discord 確認」第 4 項：channel 第一則、thread 後續、DM 三處的檔案都出現在原處 | agent 照 `agents/AGENTS.md` 用 curl 傳，沒有離線測試 |
 | 3 | 生圖 | 上面那兩行 `company-image generate`（會產生一次計費呼叫） | 離線測試只驗 request shape |
 | 4 | Artifact cleanup 排程 | `./scripts/cleanup-artifacts.sh` 手動跑一次，再確認 crontab entry 存在、log 沒有 `FAILED` | 靜態測試只證明排程被寫進去，不證明 cron 觸發過 |
 | 5 | 模型推論直連公司 gateway | 一個 Discord 問題得到回答，開頭沒有 model metadata warning；一次 shell tool call 可用；同一 thread 的第二則訊息恢復原 session（`session/load`），不是重開 | 離線沒有任何東西能證明 gateway 收這條路由 |

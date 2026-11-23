@@ -26,7 +26,7 @@ clone 的工作副本、自己安裝的工具都在這裡；所有 thread 共用
 _Avoid_: thread workspace、sandbox
 
 **patch**:
-agent 把改好的 code 交回人的形式：`git format-patch` 產出的 `.patch`，用 `discord-thread-artifact`
+agent 把改好的 code 交回人的形式：`git format-patch` 產出的 `.patch`，用 Discord API
 上傳到 thread。人在自己的電腦套用、review、push。
 _Avoid_: bot push、bot 開 PR
 

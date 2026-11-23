@@ -1,5 +1,7 @@
 # ADR 0009：受限 thread artifact uploader 與可選 STT
 
+> 上傳部分已被 [0018](0018-upload-files-the-official-openab-way.md) 取代（2026-11-23）：改用 OpenAB 官方的 curl 寫法，CLI 已刪除。STT 部分不變。
+
 ## 決定
 
 保留單一 OpenAB container，不增加 broker 或 relay；在 runtime image 內加入

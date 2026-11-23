@@ -13,12 +13,12 @@ done
 test ! -e "$ROOT/config/openab.claude-acp.toml"
 test ! -e "$ROOT/scripts/compose.sh"
 test -x "$ROOT/agents/bin/company-image"
-test -x "$ROOT/agents/bin/discord-thread-artifact"
 test -x "$ROOT/agents/bin/agent-sync"
 test -f "$ROOT/config/skillshare/config.yaml"
 for retired in config/opencode managed-claude-settings.json agents/bin/parse-document \
   tests/parse-document.py tests/provider-route.py agents/CLAUDE.md \
-  agents/bin/slack-thread-artifact config/slack-home.json scripts/publish-slack-home.sh; do
+  agents/bin/slack-thread-artifact config/slack-home.json scripts/publish-slack-home.sh \
+  agents/bin/discord-thread-artifact tests/discord-thread-artifact.py; do
   test ! -e "$ROOT/$retired" || { echo "retired runtime file still present: $retired" >&2; exit 1; }
 done
 test -f "$ROOT/config/codex/config.toml"
@@ -383,7 +383,6 @@ else
 fi
 
 "$ROOT/tests/image-runtime.py"
-"$ROOT/tests/discord-thread-artifact.py"
 "$ROOT/tests/artifact-path-safety.py"
 python3 "$ROOT/tests/snapshot-sync.py"
 
