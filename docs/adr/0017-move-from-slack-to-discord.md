@@ -24,7 +24,7 @@ Accepted（2026-11-23）。harness 形狀照 [0012](0012-follow-the-official-ope
    - 沒有、而且在頻道：送到 `message_id`。OpenAB 用 `create_thread_from_message` 開 thread，Discord 這種 thread 的 ID 等於那則訊息的 ID。
 
    DM 與否從 ID 看不出來，Slack 時代「`D` 開頭」的判斷不能用，所以 CLI 多一個 `--check-dm`，問 Discord 的 channel type。單檔上限從 20 MiB 降到 10 MiB，配合沒有 boost 的 server。
-3. **待辦表不搬**：Slack List 跟 Slack 一起沒了，bot 先不提供待辦，skillshare 用 `exclude` 不再把 `slack-list` 裝進 bot。之後要待辦，另外決定接哪個 tracker。
+3. **待辦表不搬**：Slack List 跟 Slack 一起沒了，bot 先不提供待辦，`slack-list` 從 agent-config 刪掉（henry5720/agent-config#130）。之後要待辦，另外決定接哪個 tracker。
 4. **drafts 清理改用 GNU `find`**：`find -P -type f -mmin +1440 -delete` 不追 symlink，並用 `unlinkat` 對已開的目錄刪，不需要再依賴 `slack-list cleanup`。
 5. **Slack Home 刪除**：Discord 沒有對應的 Home tab。
 

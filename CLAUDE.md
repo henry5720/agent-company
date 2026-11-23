@@ -29,7 +29,7 @@
 |---|---|
 | 個人 machine dotfiles 與 instructions | `chezmoi` 管理的 personal dotfiles（外部正本，不是本 deployment repo） |
 | Bot 行為（runtime contract） | 個人規則在 agent-config；bot 專屬的在 `agents/AGENTS.md` |
-| Bot 的 skills、MCP 怎麼裝 | `agents/bin/agent-sync` 與 `config/skillshare/config.yaml`（skillshare，跟維護者機器同一套；`exclude` 列 bot 用不了的 skill） |
+| Bot 的 skills、MCP 怎麼裝 | `agents/bin/agent-sync` 與 `config/skillshare/config.yaml`（skillshare，跟維護者機器同一套） |
 | 領域詞彙 | `CONTEXT.md` |
 | 系統行為與能力邊界 | `docs/system-design.md` |
 | 所有版本與 OpenAB image digest | `config/versions.env` |
