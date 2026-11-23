@@ -32,10 +32,12 @@ cfg = tomllib.loads((root / 'config/openab.toml').read_text())
 assert 'slack' not in cfg, 'Slack is shut down; the bot runs on Discord'
 discord = cfg['discord']
 assert discord['bot_token'] == '${DISCORD_BOT_TOKEN}'
-assert discord['allow_all_users'] is True and discord['allow_all_channels'] is True
+# 沒有白名單 = 全 server 的成員、所有看得到的 channel（OpenAB 預設）。
+for key in ('allowed_channels', 'allowed_users', 'allow_all_channels', 'allow_all_users'):
+    assert key not in discord, f'{key}: keep the OpenAB default (no allowlist)'
 # 接同事 Chrome／Windows 的網址與 key 只在 DM 交付（agents/AGENTS.md），DM 關掉就沒有這條路。
 assert discord['allow_dm'] is True
-assert discord['allow_bot_messages'] == 'off'
+assert discord.get('allow_bot_messages', 'off') == 'off'
 # OpenAB 直接跑 codex-acp，三個 env 只從 [agent].env 給。
 assert cfg['agent']['command'] == 'codex-acp', cfg['agent']['command']
 assert not cfg['agent'].get('args'), 'codex-acp takes no args'
@@ -349,7 +351,6 @@ else
   limited 'reap-browser-tabs.mjs decision rule (node unavailable)'
 fi
 
-grep -Fq 'allow_all_users = true' "$ROOT/config/openab.toml"
 ! grep -Fq '/dev/tty' "$ROOT/scripts/preflight.sh"  # deploys must run unattended
 grep -Fq 'docker compose -f "$ROOT/compose.yaml"' "$ROOT/scripts/deploy.sh"
 grep -Fq 'docker compose -f "$ROOT/compose.yaml"' "$ROOT/scripts/preflight.sh"

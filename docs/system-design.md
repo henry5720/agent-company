@@ -51,9 +51,9 @@ Deployment host 是一台 Linux host，Compose 以維護者自己的帳號執行
 Discord 互動入口是（設定在 [`config/openab.toml`](../config/openab.toml) 的 `[discord]`）：
 
 - 公司 Discord server 成員跟 bot 的 DM（`allow_dm = true`）。接同事 Chrome、Windows 桌面的網址和 key 只在 DM 交付，所以 DM 要開著。
-- bot 看得到的 channel：要 @bot，OpenAB 從那則訊息開一個 thread；之後在 thread 裡不用再 @（`allow_user_messages = "involved"`）。其他 bot 的訊息不理（`allow_bot_messages = "off"`）。
+- bot 看得到的 channel：要 @bot，OpenAB 從那則訊息開一個 thread；之後在 thread 裡不用再 @。其他 bot 的訊息不理。兩者都是 OpenAB 預設。
 
-`allow_all_channels = true`、`allow_all_users = true` 讓 server 裡的成員都能驅動 agent，不以固定 user ID 或 channel ID allowlist 篩選。實際入口是 bot 被邀進的 server 與它看得到的 channel；把 bot 邀進新的 server 或開放新的 channel 等於擴大互動入口，要當成權限變更 review。
+`[discord]` 不設 channel／user 白名單（OpenAB 預設），server 裡的成員都能驅動 agent。實際入口是 bot 被邀進的 server 與它看得到的 channel；把 bot 邀進新的 server 或開放新的 channel 等於擴大互動入口，要當成權限變更 review。
 
 所有能驅動 agent 的 server 成員遠端能力相同，也都拿不到 GitHub credential。
 
