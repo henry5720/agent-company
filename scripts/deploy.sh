@@ -56,7 +56,7 @@ compose exec -T agent sh -lc \
    grep -q "^\[mcp_servers\.codegraph\]" /home/node/.codex/config.toml &&
    grep -q "^\[model_providers\.company\]" /home/node/.codex/config.toml &&
    ! grep -qF "\${COMPANY_GATEWAY_BASE_URL}" /home/node/.codex/config.toml &&
-   grep -qF "company agent" /home/node/.codex/AGENTS.md &&
+   grep -qF "## 回覆目標" /home/node/.codex/AGENTS.md &&
    test -r /etc/codex/config.toml && test ! -w /etc/codex/config.toml &&
    test ! -w /etc/codex/AGENTS.bot.md && test ! -w /home/node/.config/skillshare/config.yaml'
 # The chrome sidecar shares the bot's localhost: the same --browser-url the maintainer uses.
