@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""把 drafts 內已存在的產物送回指定 Slack thread 的唯一入口。
+"""把 drafts 內已存在的產物送回原本那個 Discord thread（或 DM）的唯一入口。
 
-這是單一 container 的內部信任設計：channel 與 thread_ts 是 OpenAB 放進 prompt
-的 <sender_context> 後由 agent 明確帶入，不是 ACP side-channel，更不是不可竄改的
+這是單一 container 的內部信任設計：channel、thread 與 message ID 是 OpenAB 放進
+prompt 的 <sender_context> 後由 agent 明確帶入，不是 ACP side-channel，更不是不可竄改的
 身分驗證資料。此 CLI 只縮小可造成的副作用，不能把 prompt context 變成安全邊界。
 
-兩個 Slack Web API method 的 body 都是 form，不是 JSON：`files.getUploadURLExternal`
-送 JSON body 會回 `invalid_arguments`。`files.completeUploadExternal` 的 `files` 在 form
-裡是一個 JSON 字串欄位。真正上傳 bytes 的那一段用 Slack 回傳的 upload URL、mime
-Content-Type 與原始 bytes，不帶 token。
+送到哪裡照 OpenAB（0.10.0-beta.3 `discord.rs` 的 `build_sender_context`）給的欄位決定：
+- 有 `thread_id`：訊息在 thread 裡，送到那個 thread。
+- 沒有 `thread_id`、`channel_id` 是 DM：送回 DM（OpenAB 不在 DM 開 thread）。
+- 沒有 `thread_id`、在一般頻道：OpenAB 用 `create_thread_from_message` 從觸發訊息開
+  thread，Discord 這種 thread 的 ID 就是那則訊息的 ID，所以送到 `message_id`。
+DM 與否只能問 Discord（`GET /channels/{id}` 的 type），ID 本身看不出來。
+
+上傳是一個 multipart `POST /channels/{id}/messages`：`payload_json` 帶顯示檔名並關掉
+mention，`files[0]` 帶原始 bytes。Discord 前面的 Cloudflare 會擋 urllib 預設的
+User-Agent，所以固定送 Discord 要求的 `DiscordBot (url, version)` 格式。
 
 路徑處理不用 resolve()：resolve 會跟著 symlink 走，檢查完的那個字串和之後真正
 開到的檔案可以是兩回事。這裡固定從 DRAFTS_ROOT 開一個 dirfd，再逐段
@@ -27,21 +33,24 @@ import stat
 import sys
 from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+import secrets
 from urllib.request import Request, urlopen
 
 DRAFTS_ROOT = Path("/home/node/drafts")
-SLACK_API = "https://slack.com/api"
+DISCORD_API = "https://discord.com/api/v10"
+USER_AGENT = "DiscordBot (https://github.com/henry5720/agent-company, 1)"
 ALLOWED_TYPES = {
     ".png": "image/png",
     ".md": "text/markdown",
     ".html": "text/html",
     ".patch": "text/x-patch",
 }
-CHANNEL_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
-THREAD_TS_PATTERN = re.compile(r"^[0-9]{10,13}\.[0-9]{1,9}$")
+SNOWFLAKE_PATTERN = re.compile(r"^[0-9]{17,20}$")
+# Discord channel type：1 = DM，3 = group DM。
+DM_CHANNEL_TYPES = {1, 3}
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
+# 沒有 boost 的 server 單檔上限 10 MiB；超過的 Discord 會回 40005。
+MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
 TIMEOUT_SECONDS = 90
 EXIT_INVALID_INPUT = 2
 EXIT_RUNTIME = 3
@@ -62,10 +71,10 @@ class DraftReplaced(Exception):
     """上傳成功後，那個檔名已經不是當初讀的 inode。"""
 
 
-def slack_token() -> str:
-    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    if not token or token == ("xoxb-" + "replace-me"):
-        raise RuntimeFailure("SLACK_BOT_TOKEN is not set in the runtime env")
+def discord_token() -> str:
+    token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+    if not token or token == "replace-me":
+        raise RuntimeFailure("DISCORD_BOT_TOKEN is not set in the runtime env")
     return token
 
 
@@ -215,122 +224,132 @@ def open_draft(raw: str) -> Draft:
     return Draft(parent_fd, name, data, mime, info)
 
 
-def validate_context(channel: str, thread_ts: str) -> tuple[str, str]:
-    if not CHANNEL_PATTERN.fullmatch(channel):
-        raise InputError("--channel must be a Slack C/D/G channel ID")
-    if not THREAD_TS_PATTERN.fullmatch(thread_ts):
-        raise InputError("--thread-ts must be a Slack message timestamp")
-    return channel, thread_ts
+def validate_snowflake(option: str, value: str | None) -> str | None:
+    if value is not None and not SNOWFLAKE_PATTERN.fullmatch(value):
+        raise InputError(f"{option} must be a Discord ID from <sender_context>")
+    return value
 
 
-def slack_form(method: str, fields: dict[str, str], token: str) -> dict:
-    """打一個 Slack Web API method。body 一律是 form，不是 JSON。
-
-    `files.getUploadURLExternal` 只吃 `application/x-www-form-urlencoded`；送 JSON body
-    過去會回 `invalid_arguments`（實測公司 workspace 就是這樣壞的）。Slack Web API 的
-    共通表示法是 form，所以兩個 method 都走這一條，複雜參數（`files`）在 form 裡是
-    **一個 JSON 字串欄位**，不是 nested JSON body。
-
-    因此每個 value 都必須已經是 str。留這個檢查是為了讓「直接把 list／dict 丟進來」
-    這個 bug 當場失敗，而不是被 urlencode 靜靜轉成 Python repr 再被 Slack 拒絕。
-    """
-    for key, value in fields.items():
-        if not isinstance(value, str):
-            raise RuntimeFailure(f"Slack {method} field {key} must be encoded as a string")
-    request = Request(
-        f"{SLACK_API}/{method}",
-        data=urlencode(fields).encode("ascii"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
+def discord_request(method: str, path: str, token: str, body: bytes | None = None,
+                    content_type: str | None = None) -> dict:
+    headers = {"Authorization": f"Bot {token}", "User-Agent": USER_AGENT}
+    if content_type:
+        headers["Content-Type"] = content_type
+    request = Request(f"{DISCORD_API}{path}", data=body, headers=headers, method=method)
     try:
         with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             result = json.loads(response.read())
-    except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
-        # 只放 method 與例外本身。request body 帶檔名、file_id 與 thread，header 帶
-        # token，兩者都不進 stderr。
-        raise RuntimeFailure(f"Slack {method} request failed: {exc}") from exc
-    if not isinstance(result, dict) or result.get("ok") is not True:
-        reason = result.get("error", "invalid response") if isinstance(result, dict) else "invalid response"
-        raise RuntimeFailure(f"Slack {method} rejected the request: {reason}")
+    except HTTPError as exc:
+        # Discord 的錯誤 body 是 {"code": ..., "message": ...}；只印這兩個，不印 request。
+        try:
+            detail = json.loads(exc.read())
+            reason = f"{detail.get('code')} {detail.get('message')}"
+        except (OSError, ValueError, AttributeError):
+            reason = "no error body"
+        raise RuntimeFailure(f"Discord {method} {path.split('/')[1]} returned HTTP {exc.code}: {reason}") from exc
+    except (URLError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeFailure(f"Discord {method} {path.split('/')[1]} request failed: {exc}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeFailure("Discord returned an invalid response")
     return result
 
 
-def upload(upload_url: str, data: bytes, mime: str) -> None:
-    # upload_url only comes from Slack's immediately preceding API response; it is
-    # deliberately not a CLI option and therefore cannot be selected by the agent.
-    if not isinstance(upload_url, str) or not upload_url.startswith("https://"):
-        raise RuntimeFailure("Slack returned an invalid upload URL")
-    request = Request(upload_url, data=data, headers={"Content-Type": mime}, method="POST")
-    try:
-        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            if not 200 <= response.status < 300:
-                raise RuntimeFailure(f"Slack upload returned HTTP {response.status}")
-    except (HTTPError, URLError, OSError) as exc:
-        raise RuntimeFailure(f"Slack upload failed: {exc}") from exc
+def is_dm(channel: str, token: str) -> bool:
+    return discord_request("GET", f"/channels/{channel}", token).get("type") in DM_CHANNEL_TYPES
+
+
+def target_channel(channel: str, thread: str | None, message: str | None, token: str) -> str:
+    """回傳要 POST 的 channel ID；規則見檔頭。"""
+    if thread:
+        return thread
+    if is_dm(channel, token):
+        return channel
+    if not message:
+        raise InputError("--message is required outside a thread or DM")
+    return message
+
+
+def multipart(draft: Draft) -> tuple[bytes, str]:
+    boundary = f"agent-company-{secrets.token_hex(16)}"
+    payload = json.dumps(
+        {
+            "attachments": [{"id": 0, "filename": draft.name}],
+            "allowed_mentions": {"parse": []},
+        },
+        ensure_ascii=False,
+    )
+    # header 裡的檔名固定 ASCII；顯示用的 UTF-8 檔名放在 payload_json。
+    ascii_name = "artifact" + PurePosixPath(draft.name).suffix.lower()
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode(),
+            b'Content-Disposition: form-data; name="payload_json"\r\n',
+            b"Content-Type: application/json\r\n\r\n",
+            payload.encode("utf-8"),
+            f"\r\n--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="files[0]"; filename="{ascii_name}"\r\n'.encode(),
+            f"Content-Type: {draft.mime}\r\n\r\n".encode(),
+            draft.data,
+            f"\r\n--{boundary}--\r\n".encode(),
+        ]
+    )
+    return body, f"multipart/form-data; boundary={boundary}"
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="slack-thread-artifact")
-    parser.add_argument("--file", required=True, help="drafts 內的絕對 PNG、Markdown 或 HTML 路徑")
+    parser = argparse.ArgumentParser(prog="discord-thread-artifact")
+    parser.add_argument("--file", help="drafts 內的絕對 .png、.md、.html 或 .patch 路徑")
     parser.add_argument("--channel", required=True, help="<sender_context> 的 channel_id")
-    parser.add_argument("--thread-ts", required=True, help="<sender_context> 的 thread_ts")
-    return parser.parse_args(argv)
+    parser.add_argument("--thread", help="<sender_context> 的 thread_id（有才帶）")
+    parser.add_argument("--message", help="<sender_context> 的 message_id")
+    parser.add_argument("--check-dm", action="store_true", help="只回答 --channel 是不是 DM，印 dm 或 channel")
+    args = parser.parse_args(argv)
+    if not args.check_dm and not args.file:
+        parser.error("--file is required unless --check-dm")
+    return args
 
 
-def deliver(draft: Draft, channel: str, thread_ts: str, token: str) -> None:
-    ticket = slack_form(
-        "files.getUploadURLExternal",
-        {"filename": draft.name, "length": str(len(draft.data))},
-        token,
-    )
-    upload_url, file_id = ticket.get("upload_url"), ticket.get("file_id")
-    if not isinstance(file_id, str) or not file_id:
-        raise RuntimeFailure("Slack did not return file_id")
-    upload(upload_url, draft.data, draft.mime)
-    slack_form(
-        "files.completeUploadExternal",
-        {
-            # form 裡的 `files` 是一個 JSON 字串欄位，不是 nested JSON body。
-            "files": json.dumps([{"id": file_id, "title": draft.name}], separators=(",", ":")),
-            "channel_id": channel,
-            "thread_ts": thread_ts,
-        },
-        token,
-    )
+def deliver(draft: Draft, target: str, token: str) -> None:
+    body, content_type = multipart(draft)
+    result = discord_request("POST", f"/channels/{target}/messages", token, body, content_type)
+    if not result.get("attachments"):
+        raise RuntimeFailure("Discord accepted the message but attached no file")
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
-        channel, thread_ts = validate_context(args.channel, args.thread_ts)
-        token = slack_token()
+        channel = validate_snowflake("--channel", args.channel)
+        thread = validate_snowflake("--thread", args.thread)
+        message = validate_snowflake("--message", args.message)
+        token = discord_token()
+        if args.check_dm:
+            print("dm" if is_dm(channel, token) else "channel")
+            return 0
         draft = open_draft(args.file)
     except (InputError, RuntimeFailure) as exc:
-        print(f"slack-thread-artifact: {exc}", file=sys.stderr)
+        print(f"discord-thread-artifact: {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT if isinstance(exc, InputError) else EXIT_RUNTIME
 
     with draft:
         try:
-            deliver(draft, channel, thread_ts, token)
-        except (RuntimeFailure, OSError) as exc:
-            print(f"slack-thread-artifact: {exc}", file=sys.stderr)
-            return EXIT_RUNTIME
+            target = target_channel(channel, thread, message, token)
+            deliver(draft, target, token)
+        except (InputError, RuntimeFailure, OSError) as exc:
+            print(f"discord-thread-artifact: {exc}", file=sys.stderr)
+            return EXIT_INVALID_INPUT if isinstance(exc, InputError) else EXIT_RUNTIME
         # 檔案已經送到對方手上，所以刪不掉不算交付失敗：說清楚並留給 24 小時
         # cleanup，不要回非零讓 agent 以為要重傳。
         try:
             draft.unlink()
         except DraftReplaced as exc:
-            print(f"slack-thread-artifact: {exc}", file=sys.stderr)
+            print(f"discord-thread-artifact: {exc}", file=sys.stderr)
         except OSError as exc:
             print(
-                f"slack-thread-artifact: uploaded {draft.name} but could not delete it: {exc}",
+                f"discord-thread-artifact: uploaded {draft.name} but could not delete it: {exc}",
                 file=sys.stderr,
             )
-        print(f"uploaded {draft.name} to {channel}:{thread_ts}")
+        print(f"uploaded {draft.name} to {target}")
     return 0
 
 

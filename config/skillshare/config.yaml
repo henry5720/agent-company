@@ -9,3 +9,6 @@ targets:
   codex:
     skills:
       path: ~/.agents/skills
+      # Slack 已關，bot 沒有 Slack token：slack-list 在這裡只會失敗。
+      exclude:
+        - slack-list

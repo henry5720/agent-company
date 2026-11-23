@@ -1,15 +1,14 @@
-[slack]
-bot_token = "${SLACK_BOT_TOKEN}"
-app_token = "${SLACK_APP_TOKEN}"
+[discord]
+bot_token = "${DISCORD_BOT_TOKEN}"
 
-# Workspace users may drive the bot when Slack delivers the event; channel access
-# still depends on the Slack app's actual event visibility and invitations.
+# Server 裡的成員都可驅動 bot；能不能看到訊息仍取決於 bot 被邀進哪些頻道。
+# channel 裡要 @bot 才開 thread，thread 裡不用再 @（involved）。
+# DM 要開著：接同事 Chrome、Windows 桌面的網址和 key 只在 DM 交付（agents/AGENTS.md）。
 allow_all_channels = true
 allow_all_users = true
+allow_dm = true
 allow_bot_messages = "off"
 allow_user_messages = "involved"
-assistant_mode = false
-streaming = false
 
 # OpenAB 直接跑 codex-acp。provider、model 與 catalog 在 config/codex/。
 # 三個 env 只能從這裡給：[agent].env 在 env_clear() 之後加入、會蓋過 inherit_env；
@@ -34,11 +33,10 @@ inherit_env = [
   "COMPANY_GATEWAY_BASE_URL",
   # agent-config mcp.yaml 的 context7 用 fromEnv 讀它；沒設時 context7 拿不到 key，其他 MCP 照常。
   "CONTEXT7_API_KEY",
-  "SLACK_BOT_TOKEN",
-  "SLACK_LIST_ID",
-  "SLACK_TEAM_ID",
-  "SLACK_WORKSPACE_URL",
-  "WORK_HELPER_ISSUE_MODE",
+  # agent-config mcp.yaml 的 graphify 用 fromEnv 讀它；沒設時 graphify 連不上，其他 MCP 照常。
+  "GRAPHIFY_API_KEY",
+  # discord-thread-artifact 用它把檔案傳回原 thread。
+  "DISCORD_BOT_TOKEN",
 ]
 
 # 每次啟動先把 provider、規則、skills 與 MCP 對齊 agent-config snapshot（agents/bin/agent-sync）。
@@ -50,16 +48,6 @@ exec /usr/local/bin/agent-sync
 '''
 timeout_seconds = 60
 on_failure = "abort"
-
-# 音檔只會在部署維護者確認另一個 OpenAI-compatible STT endpoint 後才啟用。公司
-# gateway 不因此被假定支援 STT；未啟用時 OpenAB 不轉錄，bot 必須明確回覆 audio 不支援。
-# endpoint 是 STT_BASE_URL + /audio/transcriptions，詳見 OpenAB 的 [stt] 文件。
-[stt]
-enabled = false
-api_key = "${STT_API_KEY}"
-base_url = "${STT_BASE_URL}"
-model = "whisper-large-v3-turbo"
-echo_transcript = false
 
 [filestore]
 # Incoming attachments use Cloudflare R2. Credentials stay in the deployment

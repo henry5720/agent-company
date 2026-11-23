@@ -41,7 +41,6 @@ compose up -d --remove-orphans
 
 compose exec -T agent python3 --version
 compose exec -T agent git --version
-compose exec -T agent /home/node/snapshots/agent-config/skills/slack-list/scripts/slack-list --help >/dev/null
 # Home is writable like OpenAB's official PVC; the snapshot on top of it is not.
 compose exec -T agent sh -lc \
   'test -w /home/node &&
@@ -50,7 +49,7 @@ compose exec -T agent sh -lc \
 # agent-sync ran in pre_boot: skills and MCP came from agent-config through skillshare, the
 # rules are the maintainer's plus the bot section, and the provider has a real gateway URL.
 compose exec -T agent sh -lc \
-  'test -e /home/node/.agents/skills/slack-list/SKILL.md &&
+  'test -e /home/node/.agents/skills/browser-access/SKILL.md &&
    grep -q "^\[mcp_servers\.codegraph\]" /home/node/.codex/config.toml &&
    grep -q "^\[model_providers\.company\]" /home/node/.codex/config.toml &&
    ! grep -qF "\${COMPANY_GATEWAY_BASE_URL}" /home/node/.codex/config.toml &&
@@ -63,12 +62,12 @@ compose exec -T agent curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -
 # Chinese pages render with real glyphs only if the sidecar layer installed the CJK fonts.
 compose exec -T chrome test -e /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 
-# 生圖與上傳：只驗它們在、可執行、不可寫。這裡不對 gateway 或 Slack 發任何請求。
+# 生圖與上傳：只驗它們在、可執行、不可寫。這裡不對 gateway 或 Discord 發任何請求。
 compose exec -T agent sh -lc \
   'command -v company-image >/dev/null &&
     company-image --help >/dev/null &&
-    slack-thread-artifact --help >/dev/null &&
-    test ! -w /usr/local/bin/slack-thread-artifact &&
+    discord-thread-artifact --help >/dev/null &&
+    test ! -w /usr/local/bin/discord-thread-artifact &&
     test ! -w /usr/local/bin/company-image'
 # Retired runtimes must not be reachable from the agent.
 compose exec -T agent sh -lc \
@@ -76,7 +75,7 @@ compose exec -T agent sh -lc \
 
 # Codex runtime: the pinned codex/codex-acp under /opt/codex-<ver>, the CODEX_PATH
 # OpenAB hands to codex-acp, and the rendered provider config read-only on top of CODEX_HOME.
-# Versions and paths only; no Slack or gateway call is made here.
+# Versions and paths only; no Discord or gateway call is made here.
 compose exec -T agent sh -lc \
   "test \"\$(readlink -f \"\$(command -v codex-acp)\")\" = \"\$(readlink -f /opt/codex-$CODEX_VERSION/node_modules/.bin/codex-acp)\" &&
    test \"\$(/opt/codex-$CODEX_VERSION/node_modules/.bin/codex --version)\" = 'codex-cli $CODEX_VERSION' &&
@@ -94,10 +93,10 @@ compose exec -T agent sh -lc "mcpdo --version >/dev/null"
 
 compose ps
 
-# preflight.sh 在 build 前已完成 R2 secret/host 檢查。R2 lifecycle 與 Slack files:read 是
+# preflight.sh 在 build 前已完成 R2 secret/host 檢查。R2 lifecycle 與 Discord Message Content Intent 是
 # runbook 的一次性設定，這裡不再每次確認。這支跑完仍不等於
 # 這一版可以放給人用。上面每一條都是 container 內的存在性與權限檢查，
-# 沒有一條打過 Slack、公司 gateway 或 STT，也沒有一條證明排程真的會觸發。
+# 沒有一條打過 Discord 或公司 gateway，也沒有一條證明排程真的會觸發。
 # 那些只能由人在有 secret 的環境做一次，做完才算 release。
 cat <<'GATE'
 
@@ -109,31 +108,32 @@ the snapshot is not. Preflight also confirmed the R2 host and credentials are pr
 
 NOT VERIFIED HERE — manual release gate, see the "人工 release gate" section of
 docs/runbook.md. Do not call this version released until every line is ticked off:
-  1. Slack round trip: an authorised user gets an answer; an unauthorised one does not.
-  2. slack-thread-artifact against real Slack: file lands in the original thread and
-     the draft is deleted; force one failure and confirm the draft is kept.
+  1. Discord round trip: @bot in a channel opens a thread and answers; a follow-up in
+     that thread needs no @; a DM gets an answer.
+  2. discord-thread-artifact against real Discord: a file from the first turn of a channel
+     question, from a later turn in that thread, and from a DM each land where they started,
+     and the draft is deleted; force one failure and confirm the draft is kept.
   3. company-image against the real company gateway (this bills one call).
   4. Artifact cleanup: `./scripts/cleanup-artifacts.sh` by hand, then confirm the
      crontab entry exists and its log has no FAILED line.
-  5. STT, only if [stt].enabled is true: one real audio file through the endpoint.
-  6. Model inference straight to the company gateway: one Slack question gets an
+  5. Model inference straight to the company gateway: one Discord question gets an
      answer with no "Model metadata" warning, a shell tool call works, and a second
      @mention in the same thread resumes the session (session/load) instead of
      starting over. Nothing offline can prove the gateway accepts this route.
-  7. Coding loop: ask for a small change in one repo; the agent clones from
+  6. Coding loop: ask for a small change in one repo; the agent clones from
      /home/node/snapshots, runs `pnpm install`, and uploads a .patch to the thread.
-  8. Browser: ask the agent to start that repo's dev server and send a screenshot
+  7. Browser: ask the agent to start that repo's dev server and send a screenshot
      taken through chrome-devtools; the PNG lands in the thread.
-  9. Colleague's Chrome over the tunnel, in a DM: following the agent's steps
+  8. Colleague's Chrome over the tunnel, in a DM: following the agent's steps
      (install cloudflared, run `cloudflared access tcp`, paste the connect URL into the
      Playwright Extension) connects; two tab-new then tab-list shows 3 tabs; after
      detach the tunnel URL returns 530 from the internet. The same request in a channel
      gets "move to DM" and no connect URL appears there.
- 10. Colleague's Windows desktop, in a DM: given the windows-mcp quick tunnel URL and
+  9. Colleague's Windows desktop, in a DM: given the windows-mcp quick tunnel URL and
      key, the agent connects with mcpdo and posts a desktop screenshot to the thread;
      after the colleague stops the server and rotates the key, the URL returns 530 and
      the old key is dead.
- 11. Browser reclaim: two threads each open a tab; the second thread does not inherit
+ 10. Browser reclaim: two threads each open a tab; the second thread does not inherit
      the first one's login; after `close` the thread's context and tabs are gone; then
      `./scripts/reap-browser-tabs.sh` by hand, confirm the crontab entry exists and its
      log has no FAILED line.

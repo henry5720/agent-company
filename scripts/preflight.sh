@@ -21,15 +21,15 @@ fail() {
 [[ $(stat -c '%a' "$ENV_FILE") =~ ^(600|640)$ ]] || fail "$ENV_FILE must have mode 600 or 640"
 
 required_keys=(
-  SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_LIST_ID SLACK_TEAM_ID SLACK_WORKSPACE_URL WORK_HELPER_ISSUE_MODE
+  DISCORD_BOT_TOKEN
   COMPANY_GATEWAY_BASE_URL COMPANY_GATEWAY_API_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
 )
 for key in "${required_keys[@]}"; do
   grep -q "^${key}=." "$ENV_FILE" || fail "$key is missing from $ENV_FILE"
 done
-grep -q '^WORK_HELPER_ISSUE_MODE=manual$' "$ENV_FILE" || fail "WORK_HELPER_ISSUE_MODE must be manual"
-grep -q '^SLACK_BOT_TOKEN=xoxb-' "$ENV_FILE" || fail "SLACK_BOT_TOKEN must start with xoxb-"
-grep -q '^SLACK_APP_TOKEN=xapp-' "$ENV_FILE" || fail "SLACK_APP_TOKEN must start with xapp-"
+# Discord bot token 是三段 base64url 用點接起來，不是 xoxb-／xapp- 那種前綴。
+grep -Eq '^DISCORD_BOT_TOKEN=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' "$ENV_FILE" ||
+  fail "DISCORD_BOT_TOKEN must be a Discord bot token (three dot-separated parts)"
 # Codex and company-image both append /responses to this prefix (ADR 0010).
 grep -Eq '^COMPANY_GATEWAY_BASE_URL=https://[^[:space:]]+[^/]$' "$ENV_FILE" ||
   fail "COMPANY_GATEWAY_BASE_URL must be an https URL without a trailing slash"
@@ -50,16 +50,6 @@ for key in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
 done
 grep -Fq "endpoint = \"https://$R2_ALLOWED_HOST\"" "$ROOT/config/openab.toml" ||
   fail "config/openab.toml [filestore].endpoint must be https://$R2_ALLOWED_HOST"
-
-# STT 是選配，且不是公司 gateway 的延伸假設。兩個值要嘛都沒有、要嘛都填；真正啟用
-# 前還必須把 OpenAB config 的 [stt].enabled 改成 true。
-stt_base=$(grep -E '^STT_BASE_URL=' "$ENV_FILE" || true)
-stt_key=$(grep -E '^STT_API_KEY=' "$ENV_FILE" || true)
-if [[ -n ${stt_base#STT_BASE_URL=} || -n ${stt_key#STT_API_KEY=} ]]; then
-  [[ -n ${stt_base#STT_BASE_URL=} && -n ${stt_key#STT_API_KEY=} ]] ||
-    fail "STT_BASE_URL and STT_API_KEY must be set together"
-  [[ $stt_base == STT_BASE_URL=https://* ]] || fail "STT_BASE_URL must be an https URL"
-fi
 
 printf 'runtime: codex-acp\nconfig:  %s\n' "$ROOT/config/openab.toml"
 # A config or catalog that does not parse stops codex from starting at all. The template
@@ -103,7 +93,7 @@ for entry in "$SNAPSHOT_ROOT"/*; do
   [[ -n ${expected[$name]:-} ]] || fail "$entry is not listed in config/repos.conf but would be mounted"
 done
 
-# R2 lifecycle and Slack files:read are one-time external settings that no API here can
+# R2 lifecycle and the Discord Message Content Intent are one-time external settings that no API here can
 # check. They live in the runbook's first-time setup, not in every deploy, so deploys can
 # run unattended.
 
