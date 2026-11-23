@@ -17,7 +17,7 @@ Accepted（2026-11-23）。harness 形狀照 [0012](0012-follow-the-official-ope
 
 ## Decision
 
-1. **`config/openab.toml` 改用 `[discord]`**：`allow_user_messages = "involved"`，頻道裡 @bot 會從那則訊息開 thread，之後在 thread 裡不用再 @。`allow_dm = true`，因為接同事 Chrome、Windows 的網址和 key 只在 DM 交付。
+1. **`config/openab.toml` 改用 `[discord]`**，除了 `allow_dm = true` 都照 OpenAB 預設：頻道裡 @bot 會從那則訊息開 thread，之後在 thread 裡不用再 @。DM 要開，因為接同事 Chrome、Windows 的網址和 key 只在 DM 交付。
 2. **`discord-thread-artifact` 取代 `slack-thread-artifact`**：路徑安全的做法不變。上傳改成一個 multipart `POST /channels/{id}/messages`。目標照 OpenAB 給的 `<sender_context>` 決定：
    - 有 `thread_id`：送到那個 thread。
    - 沒有、而且是 DM：送回 DM。

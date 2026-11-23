@@ -1,14 +1,9 @@
 [discord]
 bot_token = "${DISCORD_BOT_TOKEN}"
 
-# Server 裡的成員都可驅動 bot；能不能看到訊息仍取決於 bot 被邀進哪些頻道。
-# channel 裡要 @bot 才開 thread，thread 裡不用再 @（involved）。
-# DM 要開著：接同事 Chrome、Windows 桌面的網址和 key 只在 DM 交付（agents/AGENTS.md）。
-allow_all_channels = true
-allow_all_users = true
+# 其餘照 OpenAB 預設：沒有 channel／user 白名單 = 全開，channel 要 @bot 才開 thread，不理其他 bot。
+# DM 預設關，這裡要開：接同事 Chrome、Windows 桌面的網址和 key 只在 DM 交付（agents/AGENTS.md）。
 allow_dm = true
-allow_bot_messages = "off"
-allow_user_messages = "involved"
 
 # OpenAB 直接跑 codex-acp。provider、model 與 catalog 在 config/codex/。
 # 三個 env 只能從這裡給：[agent].env 在 env_clear() 之後加入、會蓋過 inherit_env；
@@ -56,17 +51,12 @@ on_failure = "abort"
 bucket = "work-agent-attachments"
 endpoint = "https://99de68928da234ebcf0c9370443ad7ee.r2.cloudflarestorage.com"
 region = "auto"
-prefix = "incoming/"
-presigned_ttl = 3600
+# 預設 250；agents/AGENTS.md 跟使用者講的是 50 MiB。
 max_file_size_mb = 50
 access_key_id = "${R2_ACCESS_KEY_ID}"
 secret_access_key = "${R2_SECRET_ACCESS_KEY}"
 
+# 跟 OpenAB 預設相同，寫明是因為 [agent].env 的 PLAYWRIGHT_MCP_IDLE_TIMEOUT 跟著它（ADR 0016）。
 [pool]
 max_sessions = 10
 session_ttl_hours = 4
-
-[reactions]
-enabled = true
-remove_after_reply = true
-tool_display = "compact"
